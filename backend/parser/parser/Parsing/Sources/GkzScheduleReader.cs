@@ -9,10 +9,20 @@ internal static class GkzScheduleReader
     // MEC uses shortened Russian month names that do not all match ru-RU's MMM format.
     private static readonly IReadOnlyDictionary<string, int> Months = new Dictionary<string, int>
     {
-        ["янв"] = 1, ["фев"] = 2, ["мар"] = 3, ["апр"] = 4,
-        ["май"] = 5, ["мая"] = 5, ["июн"] = 6, ["июл"] = 7,
-        ["авг"] = 8, ["сен"] = 9, ["сент"] = 9, ["окт"] = 10,
-        ["ноя"] = 11, ["дек"] = 12
+        ["янв"] = 1,
+        ["фев"] = 2,
+        ["мар"] = 3,
+        ["апр"] = 4,
+        ["май"] = 5,
+        ["мая"] = 5,
+        ["июн"] = 6,
+        ["июл"] = 7,
+        ["авг"] = 8,
+        ["сен"] = 9,
+        ["сент"] = 9,
+        ["окт"] = 10,
+        ["ноя"] = 11,
+        ["дек"] = 12
     };
 
     public static Schedule Read(IDocument document, DateTime? calendarStart)

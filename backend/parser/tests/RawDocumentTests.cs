@@ -1,4 +1,8 @@
+using Bashkiria.Events.Parser.Models;
 using System.Net;
+using Bashkiria.Events.Parser.Configuration;
+using Bashkiria.Events.Parser.Processing;
+using Microsoft.Extensions.Options;
 using System.Security.Cryptography;
 using System.Text;
 using Bashkiria.Events.Parser.Clients;
@@ -63,8 +67,7 @@ public sealed class RawDocumentTests
             Assert.Equal(html, store.Documents[1].Content);
             throw new FormatException("Simulated markup failure");
         });
-        var collector = new GkzCollector(new GkzClient(http, store), new GkzListingParser(),
-            parser, NullLogger<GkzCollector>.Instance);
+        var collector = CreateCollector(http, store, parser);
 
         var result = await collector.CollectAsync(CancellationToken.None);
 
@@ -81,10 +84,9 @@ public sealed class RawDocumentTests
             ? Html("<a href='/events/fixture/'>Card</a>") : Html("<h1>Fixture</h1>")));
         var parsed = false;
         var parser = new CallbackParser(_ => { parsed = true; return []; });
-        var collector = new GkzCollector(new GkzClient(http, store), new GkzListingParser(),
-            parser, NullLogger<GkzCollector>.Instance);
+        var collector = CreateCollector(http, store, parser);
 
-        await Assert.ThrowsAsync<RawDocumentStorageException>(() => collector.CollectAsync(CancellationToken.None));
+        await Assert.ThrowsAsync<ParserStorageException>(() => collector.CollectAsync(CancellationToken.None));
 
         Assert.False(parsed);
         Assert.Single(store.Documents);
@@ -96,8 +98,7 @@ public sealed class RawDocumentTests
         var store = new MemoryStore();
         using var http = new HttpClient(new FixtureHandler(url => url.AbsolutePath == "/afisha/"
             ? Html("<a href='/events/fixture/'>Card</a>") : Html("<h1>Fixture</h1>")));
-        var collector = new GkzCollector(new GkzClient(http, store), new GkzListingParser(),
-            new GkzParser(), NullLogger<GkzCollector>.Instance);
+        var collector = CreateCollector(http, store, new GkzParser());
 
         var result = await collector.CollectAsync(CancellationToken.None);
 
@@ -119,6 +120,61 @@ public sealed class RawDocumentTests
         Assert.Equal(0, handler.RequestCount);
     }
 
+    [Fact]
+    public async Task SameSourceRedirectIsFollowedAndBothResponsesArePreserved()
+    {
+        var store = new MemoryStore();
+        var handler = new FixtureHandler(url =>
+        {
+            if (url.AbsolutePath == "/events/fixture/")
+            {
+                var redirect = new HttpResponseMessage(HttpStatusCode.MovedPermanently);
+                redirect.Headers.Location = new Uri("/events/renamed/", UriKind.Relative);
+                return redirect;
+            }
+            return Html("<h1>Redirected fixture</h1>");
+        });
+        using var http = new HttpClient(handler);
+        var result = await new GkzClient(http, store).GetEventPageAsync(PageUrl, CancellationToken.None);
+        Assert.Equal(2, store.Documents.Count);
+        Assert.Equal(301, store.Documents[0].HttpStatus);
+        Assert.Equal("/events/renamed/", result.Url.AbsolutePath);
+    }
+
+    [Fact]
+    public async Task CrossHostRedirectIsRejectedBeforeFollowingIt()
+    {
+        var store = new MemoryStore();
+        var handler = new FixtureHandler(_ =>
+        {
+            var redirect = new HttpResponseMessage(HttpStatusCode.Redirect);
+            redirect.Headers.Location = new Uri("https://example.org/events/fixture/");
+            return redirect;
+        });
+        using var http = new HttpClient(handler);
+        await Assert.ThrowsAsync<HttpRequestException>(() => new GkzClient(http, store).GetEventPageAsync(PageUrl, CancellationToken.None));
+        Assert.Single(store.Documents);
+        Assert.Equal(1, handler.RequestCount);
+    }
+
+    private static GkzCollector CreateCollector(HttpClient http, IRawDocumentStore store, IEventParser parser)
+    {
+        var options = Options.Create(new ParserOptions
+        {
+            RequestDelayMilliseconds = 0,
+            Sources = [new() { Id = "gkz", Kind = "Gkz", ListingUrl = GkzClient.ListingUrl.AbsoluteUri, EventPathPattern = "^/events/[^/]+/?$" }]
+        });
+        var registry = new SourceRegistry(options, parser, new StructuredEventParser());
+        return new GkzCollector(new SourceCollector(registry, new SourcePageClient(http, store), new MemoryEventStore(),
+            new CandidateNormalizer(TimeProvider.System), options, NullLogger<SourceCollector>.Instance));
+    }
+
+    private sealed class MemoryEventStore : IEventStore
+    {
+        public Task<EventSaveResult> SaveAsync(SourceOptions source, EventCandidate candidate, RawDocument document, CancellationToken token) =>
+            Task.FromResult(new EventSaveResult(Guid.NewGuid(), "added", PublicationStatus.Draft));
+    }
+
     private static HttpResponseMessage Html(string content) =>
         new(HttpStatusCode.OK) { Content = new StringContent(content, Encoding.UTF8, "text/html") };
 
@@ -131,7 +187,7 @@ public sealed class RawDocumentTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (Documents.Count + 1 == FailOnSave)
-                throw new RawDocumentStorageException("Simulated database failure");
+                throw new ParserStorageException("Simulated database failure");
             Documents.Add(document);
             return Task.CompletedTask;
         }

@@ -1,7 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 
-namespace Bashkiria.Events.Parser.Storage;
+namespace Bashkiria.Events.Parser.Models;
 
 public sealed record RawDocument(
     Guid Id,

@@ -12,6 +12,9 @@ public sealed record CollectionResult
     public required int ParsedPages { get; init; }
     public required IReadOnlyList<EventCandidate> Items { get; init; }
     public required IReadOnlyList<CollectionError> Errors { get; init; }
+    public int AddedEvents { get; init; }
+    public int UpdatedEvents { get; init; }
+    public int UnchangedEvents { get; init; }
 
     public int UndatedCandidates => Items.Count(item => item.StartDate is null);
     public int ReviewRequiredCandidates => Items.Count(item => item.RequiresReview);
