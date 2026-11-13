@@ -1,4 +1,36 @@
+# Parser service: .NET build output
+**/bin/
+**/obj/
+artifacts/
+
+# Visual Studio and Rider local files
+.vs/
+.idea/
+*.user
+*.suo
+*.rsuser
+*.sln.docstates
+
+# Test results and coverage
+TestResults/
+coverage/
+*.coverage
+*.coveragexml
+
+# Local secrets and configuration
 .env
 .env.*
 !.env.example
 .vscode/*
+!.env.*.example
+appsettings.Local.json
+appsettings.*.Local.json
+
+# Logs
+logs/
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
