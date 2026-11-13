@@ -1,0 +1,1 @@
+# bashkiria-events
