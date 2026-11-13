@@ -28,7 +28,7 @@ class OfflineMigrationTest(unittest.TestCase):
             capture_output=True, text=True, timeout=20,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        for name in ("chat_sessions", "chat_runs", "chat_messages", "alembic_version"):
+        for name in ("chat_sessions", "chat_runs", "chat_messages", "parser_raw_documents", "alembic_version"):
             self.assertIn(f"CREATE TABLE {name}", result.stdout)
 
 
@@ -46,7 +46,7 @@ class MigrationTest(unittest.TestCase):
         with psycopg.connect(self.base_url, autocommit=True) as connection:
             connection.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(self.schema)))
 
-    def migrate(self, *, downgrade=False):
+    def migrate(self, *, downgrade=False, revision=None):
         config = Config(str(INI))
         engine = create_engine(
             "postgresql+psycopg://", creator=lambda: psycopg.connect(self.dsn), poolclass=NullPool
@@ -55,7 +55,7 @@ class MigrationTest(unittest.TestCase):
             with engine.begin() as connection:
                 config.attributes["connection"] = connection
                 if downgrade:
-                    command.downgrade(config, "base")
+                    command.downgrade(config, revision or "base")
                 else:
                     command.upgrade(config, "head")
         finally:
@@ -110,24 +110,24 @@ class MigrationTest(unittest.TestCase):
 
     def test_fresh_upgrade_and_repeat(self):
         self.migrate()
-        self.assertEqual(self.current(), "0001_chat_history")
+        self.assertEqual(self.current(), "0002_parser_raw_documents")
         self.migrate()
-        self.assertEqual(self.current(), "0001_chat_history")
+        self.assertEqual(self.current(), "0002_parser_raw_documents")
 
     def test_downgrade_and_upgrade(self):
         self.migrate()
         self.migrate(downgrade=True)
         self.assertIsNone(self.current())
         with psycopg.connect(self.dsn) as connection:
-            for name in ("chat_sessions", "chat_runs", "chat_messages"):
+            for name in ("chat_sessions", "chat_runs", "chat_messages", "parser_raw_documents"):
                 self.assertIsNone(connection.execute("SELECT to_regclass(%s)", (name,)).fetchone()[0])
         self.migrate()
-        self.assertEqual(self.current(), "0001_chat_history")
+        self.assertEqual(self.current(), "0002_parser_raw_documents")
 
     def test_legacy_adoption_preserves_messages_and_ids(self):
         self.legacy_database()
         self.migrate()
-        self.assertEqual(self.current(), "0001_chat_history")
+        self.assertEqual(self.current(), "0002_parser_raw_documents")
         self.assert_legacy_data_intact()
         self.migrate()
         self.assert_legacy_data_intact()
@@ -168,4 +168,38 @@ class MigrationTest(unittest.TestCase):
                 if process.poll() is None:
                     process.kill()
                     process.communicate()
+        self.assertEqual(self.current(), "0002_parser_raw_documents")
+
+    def test_raw_documents_preserve_history_and_validate_hash(self):
+        self.migrate()
+        content = "<h1>Тестовая карточка</h1>"
+        digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        insert = """INSERT INTO parser_raw_documents
+                    (id, source_id, url, fetched_at, http_status, content, content_hash)
+                    VALUES (%s, 'gkz', 'https://example.org/events/fixture/', now(), %s, %s, %s)"""
+        with psycopg.connect(self.dsn) as connection:
+            # Same content can be fetched again; even unsuccessful HTTP responses are preserved.
+            for status in (200, 404):
+                connection.execute(insert, (uuid4(), status, content, digest))
+            rows = connection.execute(
+                "SELECT http_status, content, content_hash, fetched_at FROM parser_raw_documents ORDER BY http_status"
+            ).fetchall()
+            self.assertEqual([row[0] for row in rows], [200, 404])
+            for row in rows:
+                self.assertEqual(row[1:3], (content, digest))
+                self.assertIsNotNone(row[3].tzinfo)
+
+        with self.assertRaises(psycopg.errors.CheckViolation):
+            with psycopg.connect(self.dsn) as connection:
+                connection.execute(insert, (uuid4(), 200, content, "invalid-hash"))
+
+    def test_raw_documents_downgrade_preserves_chat_data(self):
+        self.legacy_database()
+        self.migrate()
+        self.migrate(downgrade=True, revision="0001_chat_history")
         self.assertEqual(self.current(), "0001_chat_history")
+        self.assert_legacy_data_intact()
+        with psycopg.connect(self.dsn) as connection:
+            self.assertIsNone(connection.execute("SELECT to_regclass('parser_raw_documents')").fetchone()[0])
+        self.migrate()
+        self.assertEqual(self.current(), "0002_parser_raw_documents")
