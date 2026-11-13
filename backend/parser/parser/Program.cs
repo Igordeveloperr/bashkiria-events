@@ -6,6 +6,7 @@ using Bashkiria.Events.Parser.Clients;
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddHealthChecks();
 builder.Services.AddSingleton<IEventParser, GkzParser>();
+builder.Services.AddSingleton<GkzListingParser>();
 
 builder.Services
     .AddHttpClient<GkzClient>(client =>
