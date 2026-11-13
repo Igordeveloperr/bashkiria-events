@@ -8,6 +8,7 @@ public sealed record EventCandidate
 {
     public required string Title { get; init; }
     public required Uri SourceUrl { get; init; }
+    public Guid? RawDocumentId { get; init; }
 
     // A source may publish a date without a time. Do not invent midnight.
     public DateOnly? StartDate { get; init; }

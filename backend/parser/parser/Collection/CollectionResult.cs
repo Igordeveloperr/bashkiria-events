@@ -5,6 +5,7 @@ namespace Bashkiria.Events.Parser.Collection;
 public sealed record CollectionResult
 {
     public required string SourceId { get; init; }
+    public Guid? ListingDocumentId { get; init; }
     public required int DiscoveredPages { get; init; }
     public required int ProcessedPages { get; init; }
     public required int DownloadedPages { get; init; }

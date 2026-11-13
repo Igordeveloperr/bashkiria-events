@@ -3,12 +3,30 @@ using Bashkiria.Events.Parser.Parsing;
 using Bashkiria.Events.Parser.Parsing.Sources;
 using Bashkiria.Events.Parser.Clients;
 using Bashkiria.Events.Parser.Collection;
+using Bashkiria.Events.Parser.Storage;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// load env vars
+if (builder.Environment.IsDevelopment())
+{
+    var envPath = Path.GetFullPath(
+        Path.Combine(builder.Environment.ContentRootPath, "..", ".env"));
+
+    if (File.Exists(envPath))
+    {
+        DotNetEnv.Env.NoClobber().Load(envPath);
+
+        builder.Configuration.AddEnvironmentVariables();
+        builder.Configuration.AddCommandLine(args);
+    }
+}
+
 builder.Services.AddHealthChecks();
 builder.Services.AddSingleton<IEventParser, GkzParser>();
 builder.Services.AddSingleton<GkzListingParser>();
 builder.Services.AddTransient<GkzCollector>();
+builder.Services.AddSingleton<IRawDocumentStore, PostgresRawDocumentStore>();
 
 builder.Services
     .AddHttpClient<GkzClient>(client =>
@@ -26,6 +44,22 @@ builder.Services
     });
 
 var app = builder.Build();
+
+app.Use(async (context, next) =>
+{
+    try
+    {
+        await next(context);
+    }
+    catch (RawDocumentStorageException exception)
+    {
+        app.Logger.LogError(exception, "Failed to persist a raw source document");
+        await Results.Problem(
+            title: "Не удалось сохранить исходную страницу. Проверьте подключение к БД и миграции.",
+            statusCode: StatusCodes.Status503ServiceUnavailable).ExecuteAsync(context);
+    }
+});
+
 app.MapHealthChecks("/health");
 
 if (app.Environment.IsDevelopment())
@@ -66,15 +100,16 @@ if (app.Environment.IsDevelopment())
         {
             try
             {
-                var html = await client.GetListingHtmlAsync(
+                var document = await client.GetListingPageAsync(
                     cancellationToken);
 
                 var links = listingParser.ParseLinks(
-                    html,
+                    document.Content,
                     GkzClient.ListingUrl);
 
                 return Results.Ok(new
                 {
+                    rawDocumentId = document.Id,
                     count = links.Count,
                     links
                 });
@@ -113,11 +148,12 @@ if (app.Environment.IsDevelopment())
 
             try
             {
-                var html = await client.GetEventHtmlAsync(
+                var document = await client.GetEventPageAsync(
                     pageUrl,
                     cancellationToken);
 
-                var items = parser.Parse(html, pageUrl);
+                var items = parser.Parse(document.Content, document.Url)
+                    .Select(item => item with { RawDocumentId = document.Id });
 
                 return Results.Ok(items);
             }

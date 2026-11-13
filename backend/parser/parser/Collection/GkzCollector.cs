@@ -1,6 +1,7 @@
 using Bashkiria.Events.Parser.Clients;
 using Bashkiria.Events.Parser.Parsing;
 using Bashkiria.Events.Parser.Parsing.Sources;
+using Bashkiria.Events.Parser.Storage;
 
 namespace Bashkiria.Events.Parser.Collection;
 
@@ -30,8 +31,8 @@ public sealed class GkzCollector
         cancellationToken.ThrowIfCancellationRequested();
 
         // Without a listing there is no collection to continue. Let the caller report failure.
-        var listingHtml = await _client.GetListingHtmlAsync(cancellationToken);
-        var links = _listingParser.ParseLinks(listingHtml, GkzClient.ListingUrl);
+        var listing = await _client.GetListingPageAsync(cancellationToken);
+        var links = _listingParser.ParseLinks(listing.Content, listing.Url);
         var items = new List<EventCandidate>();
         var errors = new List<CollectionError>();
         var processedPages = 0;
@@ -43,10 +44,10 @@ public sealed class GkzCollector
             cancellationToken.ThrowIfCancellationRequested();
             processedPages++;
 
-            string html;
+            RawDocument document;
             try
             {
-                html = await _client.GetEventHtmlAsync(pageUrl, cancellationToken);
+                document = await _client.GetEventPageAsync(pageUrl, cancellationToken);
                 downloadedPages++;
             }
             catch (HttpRequestException exception)
@@ -68,7 +69,7 @@ public sealed class GkzCollector
             IReadOnlyList<EventCandidate> candidates;
             try
             {
-                candidates = _eventParser.Parse(html, pageUrl);
+                candidates = _eventParser.Parse(document.Content, document.Url);
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
@@ -84,7 +85,7 @@ public sealed class GkzCollector
             }
 
             parsedPages++;
-            items.AddRange(candidates);
+            items.AddRange(candidates.Select(item => item with { RawDocumentId = document.Id }));
         }
 
         cancellationToken.ThrowIfCancellationRequested();
@@ -92,6 +93,7 @@ public sealed class GkzCollector
         return new CollectionResult
         {
             SourceId = _eventParser.SourceId,
+            ListingDocumentId = listing.Id,
             DiscoveredPages = links.Count,
             ProcessedPages = processedPages,
             DownloadedPages = downloadedPages,
