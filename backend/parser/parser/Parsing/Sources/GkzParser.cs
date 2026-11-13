@@ -41,6 +41,12 @@ namespace Bashkiria.Events.Parser.Parsing.Sources
 
             var calendarStart = ReadStartDateTime(document, pageUrl);
             var schedule = GkzScheduleReader.Read(document, calendarStart);
+            var structured = StructuredDataReader.ReadEvents(document).FirstOrDefault();
+            var price = EventFields.Price(structured,
+                document.QuerySelector(".mec-events-event-more-info a")?.TextContent.Trim());
+            var ticketUrl = document.QuerySelector(".mec-events-event-more-info a")?.GetAttribute("href");
+            Uri.TryCreate(pageUrl, ticketUrl, out var orgLink);
+            if (orgLink is not null && (orgLink.Scheme is not ("http" or "https") || !string.IsNullOrEmpty(orgLink.UserInfo))) orgLink = null;
 
             return
             [
@@ -55,6 +61,11 @@ namespace Bashkiria.Events.Parser.Parsing.Sources
                 StartDate = schedule.Date,
                 StartTime = schedule.Time,
                 Issues = schedule.Issues,
+                PriceMin = price.Min, PriceMax = price.Max, IsFree = price.Free,
+                AgeLimit = EventFields.Age(description + " " + title),
+                Category = EventFields.Category(title),
+                SourceStatus = EventFields.Status(structured?["eventStatus"]),
+                OrgLink = orgLink,
             }
             ];
         }

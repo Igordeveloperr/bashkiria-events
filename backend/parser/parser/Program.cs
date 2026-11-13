@@ -1,210 +1,55 @@
-using Bashkiria.Events.Parser.Contracts;
-using Bashkiria.Events.Parser.Parsing;
-using Bashkiria.Events.Parser.Parsing.Sources;
-using Bashkiria.Events.Parser.Clients;
-using Bashkiria.Events.Parser.Collection;
-using Bashkiria.Events.Parser.Storage;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Threading.RateLimiting;
+using Bashkiria.Events.Parser.Api;
+using Bashkiria.Events.Parser.Configuration;
+using Bashkiria.Events.Parser.Data;
+using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// load env vars
 if (builder.Environment.IsDevelopment())
 {
-    var envPath = Path.GetFullPath(
-        Path.Combine(builder.Environment.ContentRootPath, "..", ".env"));
-
+    var envPath = Path.GetFullPath(Path.Combine(builder.Environment.ContentRootPath, "..", ".env"));
     if (File.Exists(envPath))
     {
         DotNetEnv.Env.NoClobber().Load(envPath);
-
         builder.Configuration.AddEnvironmentVariables();
         builder.Configuration.AddCommandLine(args);
     }
 }
 
+builder.Services.AddParser(builder.Configuration, builder.Environment);
 builder.Services.AddHealthChecks();
-builder.Services.AddSingleton<IEventParser, GkzParser>();
-builder.Services.AddSingleton<GkzListingParser>();
-builder.Services.AddTransient<GkzCollector>();
-builder.Services.AddSingleton<IRawDocumentStore, PostgresRawDocumentStore>();
-
-builder.Services
-    .AddHttpClient<GkzClient>(client =>
-    {
-        client.Timeout = TimeSpan.FromSeconds(20);
-        client.MaxResponseContentBufferSize = 8 * 1024 * 1024;
-        client.DefaultRequestHeaders.UserAgent.ParseAdd(
-            "BashkiriaEventsParser/1.0");
-        client.DefaultRequestHeaders.Accept.ParseAdd("text/html");
-    })
-    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
-    {
-        AllowAutoRedirect = false,
-        UseCookies = false
-    });
-
-var app = builder.Build();
-
-app.Use(async (context, next) =>
+builder.Services.AddOpenApi(options => options.OpenApiVersion = Microsoft.OpenApi.OpenApiSpecVersion.OpenApi3_1);
+builder.Services.ConfigureHttpJsonOptions(options =>
+    options.SerializerOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase)));
+builder.Services.AddRateLimiter(options =>
 {
-    try
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddFixedWindowLimiter("parser-api", limiter =>
     {
-        await next(context);
-    }
-    catch (RawDocumentStorageException exception)
-    {
-        app.Logger.LogError(exception, "Failed to persist a raw source document");
-        await Results.Problem(
-            title: "Не удалось сохранить исходную страницу. Проверьте подключение к БД и миграции.",
-            statusCode: StatusCodes.Status503ServiceUnavailable).ExecuteAsync(context);
-    }
+        limiter.PermitLimit = 60;
+        limiter.Window = TimeSpan.FromMinutes(1);
+        limiter.QueueLimit = 0;
+        limiter.AutoReplenishment = true;
+    });
 });
 
+var app = builder.Build();
+app.UseExceptionHandler();
+app.UseRateLimiter();
 app.MapHealthChecks("/health");
-
-if (app.Environment.IsDevelopment())
+app.MapOpenApi();
+app.MapGet("/health/ready", async (IDbContextFactory<ParserDbContext> contexts, CancellationToken token) =>
 {
-    app.MapGet("/parser/preview/gkz/collect",
-        async (
-            GkzCollector collector,
-            ILogger<GkzCollector> logger,
-            CancellationToken cancellationToken) =>
-        {
-            try
-            {
-                return Results.Ok(await collector.CollectAsync(cancellationToken));
-            }
-            catch (HttpRequestException exception)
-            {
-                logger.LogWarning(exception, "Failed to download GKZ listing for collection");
-                return Results.Problem(
-                    title: "Не удалось загрузить афишу ГКЗ.",
-                    statusCode: StatusCodes.Status502BadGateway);
-            }
-            catch (OperationCanceledException exception)
-                when (!cancellationToken.IsCancellationRequested)
-            {
-                logger.LogWarning(exception, "GKZ listing download timed out during collection");
-                return Results.Problem(
-                    title: "Источник не ответил вовремя.",
-                    statusCode: StatusCodes.Status504GatewayTimeout);
-            }
-        });
-
-    app.MapGet("/parser/preview/gkz/links",
-        async (
-            GkzClient client,
-            GkzListingParser listingParser,
-            ILogger<GkzClient> logger,
-            CancellationToken cancellationToken) =>
-        {
-            try
-            {
-                var document = await client.GetListingPageAsync(
-                    cancellationToken);
-
-                var links = listingParser.ParseLinks(
-                    document.Content,
-                    GkzClient.ListingUrl);
-
-                return Results.Ok(new
-                {
-                    rawDocumentId = document.Id,
-                    count = links.Count,
-                    links
-                });
-            }
-            catch (HttpRequestException exception)
-            {
-                logger.LogWarning(exception,
-                    "Failed to download GKZ listing");
-
-                return Results.Problem(
-                    title: "Не удалось загрузить афишу ГКЗ.",
-                    statusCode: StatusCodes.Status502BadGateway);
-            }
-            catch (OperationCanceledException exception)
-                when (!cancellationToken.IsCancellationRequested)
-            {
-                logger.LogWarning(exception,
-                    "GKZ listing download timed out");
-
-                return Results.Problem(
-                    title: "Источник не ответил вовремя.",
-                    statusCode: StatusCodes.Status504GatewayTimeout);
-            }
-        });
-
-    app.MapGet("/parser/preview/gkz",
-        async (
-            GkzClient client,
-            IEventParser parser,
-            ILogger<GkzClient> logger,
-            CancellationToken cancellationToken) =>
-        {
-            var pageUrl = new Uri(
-                "https://gkzbashkortostan.ru/events/" +
-                "yubilejnyj-gala-konczert-studii-diva/");
-
-            try
-            {
-                var document = await client.GetEventPageAsync(
-                    pageUrl,
-                    cancellationToken);
-
-                var items = parser.Parse(document.Content, document.Url)
-                    .Select(item => item with { RawDocumentId = document.Id });
-
-                return Results.Ok(items);
-            }
-            catch (HttpRequestException exception)
-            {
-                logger.LogWarning(exception,
-                    "Failed to download GKZ event page {PageUrl}", pageUrl);
-
-                return Results.Problem(
-                    title: "Не удалось загрузить карточку ГКЗ.",
-                    statusCode: StatusCodes.Status502BadGateway);
-            }
-            catch (OperationCanceledException exception)
-                when (!cancellationToken.IsCancellationRequested)
-            {
-                logger.LogWarning(exception,
-                    "GKZ event page download timed out {PageUrl}", pageUrl);
-
-                return Results.Problem(
-                    title: "Источник не ответил вовремя.",
-                    statusCode: StatusCodes.Status504GatewayTimeout);
-            }
-        });
-
-    app.MapPost("/parser/preview",
-        (ParsePreviewRequest request, IEventParser parser) =>
-        {
-            if (string.IsNullOrWhiteSpace(request.Html))
-            {
-                return Results.BadRequest(
-                    new { message = "HTML не должен быть пустым." });
-            }
-
-            if (request.PageUrl is null ||
-                !request.PageUrl.IsAbsoluteUri ||
-                request.PageUrl.Scheme != Uri.UriSchemeHttps ||
-                request.PageUrl.Host != "gkzbashkortostan.ru" ||
-                !request.PageUrl.AbsolutePath.StartsWith(
-                    "/events/",
-                    StringComparison.Ordinal))
-            {
-                return Results.BadRequest(
-                    new { message = "Укажи HTTPS-адрес карточки ГКЗ." });
-            }
-
-            var items = parser.Parse(
-                request.Html,
-                request.PageUrl);
-
-            return Results.Ok(items);
-        });
-}
-
+    await using var db = await contexts.CreateDbContextAsync(token);
+    await db.CollectionRuns.AnyAsync(token);
+    return Results.Ok(new { status = "ready" });
+});
+app.MapParserEndpoints();
+app.MapPreviewEndpoints();
 app.Run();
+
+public partial class Program;

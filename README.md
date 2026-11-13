@@ -1,5 +1,22 @@
 # bashkiria-events
 
+Микросервисы афиши культурных мероприятий Башкортостана.
+
+- [Парсер: запуск, API, EF Core, источники и тесты](backend/parser/README.md)
+- [База данных и миграции Alembic](backend/db/README.md)
+- [ИИ-сервис](backend/ai/README.md)
+- [Поисковый сервис](backend/searcher/README.md)
+
+PostgreSQL и миграции запускаются из корня:
+
+```powershell
+docker compose up -d postgres
+docker compose run --rm --build migrate
+```
+
+Парсер можно запускать локально через Visual Studio / .NET CLI или отдельным
+профилем Compose. Настройки и требования к ключу API описаны в его README.
+
 Все сервисы проекта описываются в корневом [compose.yaml](compose.yaml).
 Сейчас доступны PostgreSQL и одноразовый сервис миграций Alembic.
 

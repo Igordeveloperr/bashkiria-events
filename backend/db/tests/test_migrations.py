@@ -28,7 +28,7 @@ class OfflineMigrationTest(unittest.TestCase):
             capture_output=True, text=True, timeout=20,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        for name in ("chat_sessions", "chat_runs", "chat_messages", "parser_raw_documents", "alembic_version"):
+        for name in ("chat_sessions", "chat_runs", "chat_messages", "parser_raw_documents", "parser_events", "parser_event_sources", "parser_collection_runs", "parser_event_audit", "alembic_version"):
             self.assertIn(f"CREATE TABLE {name}", result.stdout)
 
 
@@ -110,24 +110,24 @@ class MigrationTest(unittest.TestCase):
 
     def test_fresh_upgrade_and_repeat(self):
         self.migrate()
-        self.assertEqual(self.current(), "0002_parser_raw_documents")
+        self.assertEqual(self.current(), "0003_parser_pipeline")
         self.migrate()
-        self.assertEqual(self.current(), "0002_parser_raw_documents")
+        self.assertEqual(self.current(), "0003_parser_pipeline")
 
     def test_downgrade_and_upgrade(self):
         self.migrate()
         self.migrate(downgrade=True)
         self.assertIsNone(self.current())
         with psycopg.connect(self.dsn) as connection:
-            for name in ("chat_sessions", "chat_runs", "chat_messages", "parser_raw_documents"):
+            for name in ("chat_sessions", "chat_runs", "chat_messages", "parser_raw_documents", "parser_events", "parser_event_sources", "parser_collection_runs", "parser_event_audit"):
                 self.assertIsNone(connection.execute("SELECT to_regclass(%s)", (name,)).fetchone()[0])
         self.migrate()
-        self.assertEqual(self.current(), "0002_parser_raw_documents")
+        self.assertEqual(self.current(), "0003_parser_pipeline")
 
     def test_legacy_adoption_preserves_messages_and_ids(self):
         self.legacy_database()
         self.migrate()
-        self.assertEqual(self.current(), "0002_parser_raw_documents")
+        self.assertEqual(self.current(), "0003_parser_pipeline")
         self.assert_legacy_data_intact()
         self.migrate()
         self.assert_legacy_data_intact()
@@ -168,7 +168,7 @@ class MigrationTest(unittest.TestCase):
                 if process.poll() is None:
                     process.kill()
                     process.communicate()
-        self.assertEqual(self.current(), "0002_parser_raw_documents")
+        self.assertEqual(self.current(), "0003_parser_pipeline")
 
     def test_raw_documents_preserve_history_and_validate_hash(self):
         self.migrate()
@@ -202,4 +202,4 @@ class MigrationTest(unittest.TestCase):
         with psycopg.connect(self.dsn) as connection:
             self.assertIsNone(connection.execute("SELECT to_regclass('parser_raw_documents')").fetchone()[0])
         self.migrate()
-        self.assertEqual(self.current(), "0002_parser_raw_documents")
+        self.assertEqual(self.current(), "0003_parser_pipeline")

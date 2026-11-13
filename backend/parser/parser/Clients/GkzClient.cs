@@ -1,3 +1,4 @@
+using Bashkiria.Events.Parser.Models;
 using Bashkiria.Events.Parser.Common;
 using Bashkiria.Events.Parser.Storage;
 
@@ -46,15 +47,10 @@ public sealed class GkzClient
         return DownloadAsync(pageUrl, cancellationToken);
     }
 
-    private async Task<RawDocument> DownloadAsync(Uri pageUrl, CancellationToken cancellationToken)
-    {
-        using var response = await _httpClient.GetAsync(pageUrl, cancellationToken);
-        var content = await response.Content.ReadAsStringAsync(cancellationToken);
-        var document = RawDocument.Create(SourceIdentificator.Gkz, pageUrl, (int)response.StatusCode, content);
-
-        // Preserve even 4xx/5xx responses; no parser receives a page before this write succeeds.
-        await _documents.SaveAsync(document, cancellationToken);
-        response.EnsureSuccessStatusCode();
-        return document;
-    }
+    private Task<RawDocument> DownloadAsync(Uri pageUrl, CancellationToken cancellationToken) =>
+        new SourcePageClient(_httpClient, _documents).DownloadAsync(new Configuration.SourceOptions
+        {
+            Id = SourceIdentificator.Gkz,
+            ListingUrl = ListingUrl.AbsoluteUri
+        }, pageUrl, cancellationToken);
 }

@@ -1,3 +1,4 @@
+using Bashkiria.Events.Parser.Models;
 namespace Bashkiria.Events.Parser.Storage;
 
 public interface IRawDocumentStore
