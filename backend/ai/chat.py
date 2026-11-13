@@ -2,10 +2,10 @@
 
 import logging
 from dataclasses import dataclass
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from langchain_core.messages import AIMessage, HumanMessage
-from storage import ChatStore, RequestConflictError, SessionBusyError, validate_identity
+from storage import ChatStore
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +46,7 @@ class ChatService:
         failed run, the caller must submit a new request ID.
         """
         if not isinstance(request_id, UUID):
-            raise ValueError("request_id должен быть UUID")
+            raise TypeError("request_id должен быть UUID")
         if not isinstance(content, str) or not content.strip():
             raise ValueError("Сообщение не должно быть пустым")
         with self.store.conversation(user_id, session_key) as conversation:
@@ -96,7 +96,7 @@ class ChatService:
                 if not isinstance(response, AIMessage) or not isinstance(
                     response.content, str
                 ):
-                    raise ValueError("Ожидался текстовый ответ модели")
+                    raise TypeError("Ожидался текстовый ответ модели")
                 trace_id = getattr(handler, "last_trace_id", None)
                 metadata = response.model_dump(
                     mode="json", include={"usage_metadata", "response_metadata"}
@@ -111,114 +111,15 @@ class ChatService:
                     answer.content,
                     trace_id,
                 )
-            except Exception as error:
+            except Exception as error:  # graph/framework code can raise arbitrary exceptions that must be persisted as chat run failures
                 try:
                     conversation.fail_run(
                         run["id"],
                         str(error) or type(error).__name__,
                         getattr(handler, "last_trace_id", None),
                     )
-                except Exception:
+                except Exception:  # noqa: BLE001 - persisting failure status must not mask the original run error
                     logger.error(
                         "Could not persist failed status for chat run %s", run["id"]
                     )
                 raise ChatRunFailedError(run["id"], str(error)) from error
-
-
-def main(argv=None):
-    """Run an interactive conversation using the same persistent chat service."""
-    import argparse
-    import sys
-
-    parser = argparse.ArgumentParser(description="Интерактивный чат с GigaChat")
-    parser.add_argument("--user-id", help="ID пользователя или CHAT_USER_ID из .env")
-    parser.add_argument(
-        "--session-key", help="Ключ диалога или CHAT_SESSION_ID из .env"
-    )
-    args = parser.parse_args(argv)
-
-    # Load .env before importing the tracing integration.
-    from config import load_config
-
-    try:
-        config = load_config()
-        user_id = (
-            args.user_id or config.chat_user_id or input("ID пользователя: ").strip()
-        )
-        session_key = args.session_key or config.chat_session_id
-        if not session_key:
-            session_key = input("Ключ диалога (Enter — новый): ").strip() or str(
-                uuid4()
-            )
-        validate_identity(user_id, session_key)
-    except (EOFError, KeyboardInterrupt):
-        print()
-        return
-    except ValueError as error:
-        parser.error(str(error))
-
-    from langchain_gigachat import GigaChat
-    from langfuse import Langfuse
-    from langfuse.langchain import CallbackHandler
-    from main import build_graph
-    from psycopg import Error as DatabaseError
-
-    langfuse = Langfuse(
-        public_key=config.langfuse_public_key,
-        secret_key=config.langfuse_secret_key,
-        base_url=config.langfuse_base_url,
-        environment=config.langfuse_environment,
-    )
-    model = None
-    try:
-        model = GigaChat(
-            credentials=config.gigachat_credentials,
-            model=config.gigachat_model,
-            scope=config.gigachat_scope,
-            verify_ssl_certs=config.gigachat_verify_ssl_certs,
-            ca_bundle_file=config.gigachat_ca_bundle_file,
-        )
-        service = ChatService(
-            ChatStore(config.database_url),
-            build_graph(model),
-            history_turns=config.chat_history_turns,
-            callback_factory=lambda: CallbackHandler(
-                public_key=config.langfuse_public_key
-            ),
-        )
-        print(f"Пользователь: {user_id}\nДиалог: {session_key}")
-        print("Для выхода введи /exit или нажми Ctrl+C.")
-        while True:
-            content = input("Вы: ").strip()
-            if content.lower() in {"/exit", "/quit"}:
-                break
-            if not content:
-                continue
-            try:
-                reply = service.send_message(
-                    user_id=user_id,
-                    session_key=session_key,
-                    request_id=uuid4(),
-                    content=content,
-                )
-                print(f"Ассистент: {reply.content}")
-            except (
-                ChatRunFailedError,
-                RequestConflictError,
-                SessionBusyError,
-                DatabaseError,
-                ValueError,
-            ) as error:
-                print(f"Ошибка: {error}", file=sys.stderr)
-    except (EOFError, KeyboardInterrupt):
-        print()
-    finally:
-        try:
-            langfuse.shutdown()
-        finally:
-            if model is not None:
-                model._client.close()
-
-
-if __name__ == "__main__":
-    main()

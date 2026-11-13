@@ -60,6 +60,8 @@ dependencies = [
     { name = "langfuse" },
     { name = "langgraph" },
     { name = "psycopg", extra = ["binary"] },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
     { name = "python-dotenv" },
 ]
 
@@ -75,6 +77,8 @@ requires-dist = [
     { name = "langfuse", specifier = "==5.2.0" },
     { name = "langgraph", specifier = ">=1,<2" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2,<4" },
+    { name = "pydantic", specifier = ">=2,<3" },
+    { name = "pydantic-settings", specifier = ">=2,<3" },
     { name = "python-dotenv", specifier = "==1.2.4" },
 ]
 
