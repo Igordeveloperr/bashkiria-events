@@ -1,0 +1,37 @@
+# Keep the project name so moving this file preserves the existing database volume.
+name: bashkiria-db
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-bashkiria}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-bashkiria}
+      POSTGRES_DB: ${POSTGRES_DB:-bashkiria}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+
+  migrate:
+    build:
+      context: ./backend/db
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: ${POSTGRES_USER:-bashkiria}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-bashkiria}
+      PGDATABASE: ${POSTGRES_DB:-bashkiria}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+volumes:
+  postgres_data:
