@@ -28,6 +28,49 @@ app.MapHealthChecks("/health");
 
 if (app.Environment.IsDevelopment())
 {
+    app.MapGet("/parser/preview/gkz/links",
+        async (
+            GkzClient client,
+            GkzListingParser listingParser,
+            ILogger<GkzClient> logger,
+            CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                var html = await client.GetListingHtmlAsync(
+                    cancellationToken);
+
+                var links = listingParser.ParseLinks(
+                    html,
+                    GkzClient.ListingUrl);
+
+                return Results.Ok(new
+                {
+                    count = links.Count,
+                    links
+                });
+            }
+            catch (HttpRequestException exception)
+            {
+                logger.LogWarning(exception,
+                    "Failed to download GKZ listing");
+
+                return Results.Problem(
+                    title: "Не удалось загрузить афишу ГКЗ.",
+                    statusCode: StatusCodes.Status502BadGateway);
+            }
+            catch (OperationCanceledException exception)
+                when (!cancellationToken.IsCancellationRequested)
+            {
+                logger.LogWarning(exception,
+                    "GKZ listing download timed out");
+
+                return Results.Problem(
+                    title: "Источник не ответил вовремя.",
+                    statusCode: StatusCodes.Status504GatewayTimeout);
+            }
+        });
+
     app.MapGet("/parser/preview/gkz",
         async (
             GkzClient client,

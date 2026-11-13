@@ -2,11 +2,22 @@ namespace Bashkiria.Events.Parser.Clients;
 
 public sealed class GkzClient
 {
+    public static Uri ListingUrl { get; } =
+        new("https://gkzbashkortostan.ru/afisha/");
+
     private readonly HttpClient _httpClient;
 
     public GkzClient(HttpClient httpClient)
     {
         _httpClient = httpClient;
+    }
+
+    public async Task<string> GetListingHtmlAsync(
+        CancellationToken cancellationToken)
+    {
+        return await _httpClient.GetStringAsync(
+            ListingUrl,
+            cancellationToken);
     }
 
     public async Task<string> GetEventHtmlAsync(
