@@ -2,11 +2,13 @@ using Bashkiria.Events.Parser.Contracts;
 using Bashkiria.Events.Parser.Parsing;
 using Bashkiria.Events.Parser.Parsing.Sources;
 using Bashkiria.Events.Parser.Clients;
+using Bashkiria.Events.Parser.Collection;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddHealthChecks();
 builder.Services.AddSingleton<IEventParser, GkzParser>();
 builder.Services.AddSingleton<GkzListingParser>();
+builder.Services.AddTransient<GkzCollector>();
 
 builder.Services
     .AddHttpClient<GkzClient>(client =>
@@ -28,6 +30,33 @@ app.MapHealthChecks("/health");
 
 if (app.Environment.IsDevelopment())
 {
+    app.MapGet("/parser/preview/gkz/collect",
+        async (
+            GkzCollector collector,
+            ILogger<GkzCollector> logger,
+            CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                return Results.Ok(await collector.CollectAsync(cancellationToken));
+            }
+            catch (HttpRequestException exception)
+            {
+                logger.LogWarning(exception, "Failed to download GKZ listing for collection");
+                return Results.Problem(
+                    title: "Не удалось загрузить афишу ГКЗ.",
+                    statusCode: StatusCodes.Status502BadGateway);
+            }
+            catch (OperationCanceledException exception)
+                when (!cancellationToken.IsCancellationRequested)
+            {
+                logger.LogWarning(exception, "GKZ listing download timed out during collection");
+                return Results.Problem(
+                    title: "Источник не ответил вовремя.",
+                    statusCode: StatusCodes.Status504GatewayTimeout);
+            }
+        });
+
     app.MapGet("/parser/preview/gkz/links",
         async (
             GkzClient client,
