@@ -18,6 +18,8 @@ services:
       timeout: 5s
       retries: 30
       start_period: 5s
+    networks:
+      - backend
 
   migrate:
     build:
@@ -32,6 +34,16 @@ services:
       postgres:
         condition: service_healthy
     restart: "no"
+    networks:
+      - backend
+
+networks:
+  backend:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.50.0/24
+          gateway: 172.28.50.1
 
 volumes:
   postgres_data:
