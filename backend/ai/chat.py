@@ -132,7 +132,9 @@ def main(argv=None):
 
     parser = argparse.ArgumentParser(description="Интерактивный чат с GigaChat")
     parser.add_argument("--user-id", help="ID пользователя или CHAT_USER_ID из .env")
-    parser.add_argument("--session-key", help="Ключ диалога или CHAT_SESSION_ID из .env")
+    parser.add_argument(
+        "--session-key", help="Ключ диалога или CHAT_SESSION_ID из .env"
+    )
     args = parser.parse_args(argv)
 
     # Load .env before importing the tracing integration.
@@ -140,10 +142,14 @@ def main(argv=None):
 
     try:
         config = load_config()
-        user_id = args.user_id or config.chat_user_id or input("ID пользователя: ").strip()
+        user_id = (
+            args.user_id or config.chat_user_id or input("ID пользователя: ").strip()
+        )
         session_key = args.session_key or config.chat_session_id
         if not session_key:
-            session_key = input("Ключ диалога (Enter — новый): ").strip() or str(uuid4())
+            session_key = input("Ключ диалога (Enter — новый): ").strip() or str(
+                uuid4()
+            )
         validate_identity(user_id, session_key)
     except (EOFError, KeyboardInterrupt):
         print()
@@ -173,9 +179,12 @@ def main(argv=None):
             ca_bundle_file=config.gigachat_ca_bundle_file,
         )
         service = ChatService(
-            ChatStore(config.database_url), build_graph(model),
+            ChatStore(config.database_url),
+            build_graph(model),
             history_turns=config.chat_history_turns,
-            callback_factory=lambda: CallbackHandler(public_key=config.langfuse_public_key),
+            callback_factory=lambda: CallbackHandler(
+                public_key=config.langfuse_public_key
+            ),
         )
         print(f"Пользователь: {user_id}\nДиалог: {session_key}")
         print("Для выхода введи /exit или нажми Ctrl+C.")
@@ -187,13 +196,18 @@ def main(argv=None):
                 continue
             try:
                 reply = service.send_message(
-                    user_id=user_id, session_key=session_key,
-                    request_id=uuid4(), content=content,
+                    user_id=user_id,
+                    session_key=session_key,
+                    request_id=uuid4(),
+                    content=content,
                 )
                 print(f"Ассистент: {reply.content}")
             except (
-                ChatRunFailedError, RequestConflictError, SessionBusyError,
-                DatabaseError, ValueError,
+                ChatRunFailedError,
+                RequestConflictError,
+                SessionBusyError,
+                DatabaseError,
+                ValueError,
             ) as error:
                 print(f"Ошибка: {error}", file=sys.stderr)
     except (EOFError, KeyboardInterrupt):
