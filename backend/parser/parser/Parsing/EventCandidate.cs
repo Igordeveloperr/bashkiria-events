@@ -20,4 +20,9 @@ public sealed record EventCandidate
     public decimal? PriceMin { get; init; }
     public decimal? PriceMax { get; init; }
     public int? AgeLimit { get; init; }
+
+    public IReadOnlyList<ParsingIssue> Issues { get; init; } = [];
+
+    public bool RequiresReview =>
+        StartDate is null || StartTime is null || Issues.Count > 0;
 }

@@ -13,6 +13,7 @@ public sealed record CollectionResult
     public required IReadOnlyList<CollectionError> Errors { get; init; }
 
     public int UndatedCandidates => Items.Count(item => item.StartDate is null);
+    public int ReviewRequiredCandidates => Items.Count(item => item.RequiresReview);
 }
 
 public sealed record CollectionError(Uri PageUrl, string Code, string Message);

@@ -39,7 +39,8 @@ namespace Bashkiria.Events.Parser.Parsing.Sources
                 .QuerySelector(MecSingleEventDescription)
                 ?.TextContent.Trim();
 
-            var start = ReadStartDateTime(document, pageUrl);
+            var calendarStart = ReadStartDateTime(document, pageUrl);
+            var schedule = GkzScheduleReader.Read(document, calendarStart);
 
             return
             [
@@ -51,12 +52,9 @@ namespace Bashkiria.Events.Parser.Parsing.Sources
                 City = GkzCity,
                 Venue = GkzVenue,
                 Address = GkzAddress,
-                StartDate = start.HasValue
-                    ? DateOnly.FromDateTime(start.Value)
-                    : null,
-                StartTime = start.HasValue
-                    ? TimeOnly.FromDateTime(start.Value)
-                    : null,
+                StartDate = schedule.Date,
+                StartTime = schedule.Time,
+                Issues = schedule.Issues,
             }
             ];
         }
