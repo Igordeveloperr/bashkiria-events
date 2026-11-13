@@ -2,7 +2,9 @@
 
 import argparse
 import sys
-from uuid import UUID, uuid4
+from uuid import uuid4
+
+from chat import ChatRunFailedError, ChatService
 
 # Import config first so .env is loaded before the tracing integration.
 from config import load_config
@@ -13,8 +15,8 @@ from langchain_gigachat import GigaChat
 from langfuse import Langfuse
 from langfuse.langchain import CallbackHandler
 from langgraph.graph import END, START, MessagesState, StateGraph
-from prompts import DEFAULT_QUESTION, SYSTEM_PROMPT
-from storage import ChatStore, RequestConflictError, SessionBusyError
+from prompts import SYSTEM_PROMPT
+from storage import ChatStore, RequestConflictError, SessionBusyError, validate_identity
 
 
 def build_graph(model):
@@ -36,62 +38,89 @@ def build_graph(model):
     return graph.compile()
 
 
-def main():
-    from chat import ChatRunFailedError, ChatService
+def main(argv=None):
+    """Run an interactive conversation using the same persistent chat service."""
 
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--user-id", help="Verified user ID (or CHAT_USER_ID)")
-    parser.add_argument("--session-key", help="Conversation key (or CHAT_SESSION_ID)")
-    parser.add_argument("--request-id", type=UUID, help="Stable UUID for retries of this message")
-    parser.add_argument("question", nargs="*", help="Message text")
-    args = parser.parse_args()
+    parser = argparse.ArgumentParser(description="Интерактивный чат с GigaChat")
+    parser.add_argument("--user-id", help="ID пользователя или CHAT_USER_ID из .env")
+    parser.add_argument(
+        "--session-key", help="Ключ диалога или CHAT_SESSION_ID из .env"
+    )
+    args = parser.parse_args(argv)
+
+    # Load .env before importing the tracing integration.
+
     try:
         config = load_config()
+        user_id = (
+            args.user_id or config.chat_user_id or input("ID пользователя: ").strip()
+        )
+        session_key = args.session_key or config.chat_session_id
+        if not session_key:
+            session_key = input("Ключ диалога (Enter — новый): ").strip() or str(
+                uuid4()
+            )
+        validate_identity(user_id, session_key)
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return
     except ValueError as error:
-        raise SystemExit(str(error)) from None
-
-    user_id = args.user_id or config.chat_user_id
-    session_key = args.session_key or config.chat_session_id
-    if not user_id or not session_key:
-        parser.error("Укажи --user-id и --session-key или CHAT_USER_ID и CHAT_SESSION_ID")
+        parser.error(str(error))
 
     langfuse = Langfuse(
-        public_key=config.langfuse_public_key,
-        secret_key=config.langfuse_secret_key,
+        public_key=config.langfuse_public_key.get_secret_value(),
+        secret_key=config.langfuse_secret_key.get_secret_value(),
         base_url=config.langfuse_base_url,
         environment=config.langfuse_environment,
     )
+    model = None
     try:
-        # The SDK obtains and refreshes its access token using these credentials.
         model = GigaChat(
-            credentials=config.gigachat_credentials,
+            credentials=config.gigachat_credentials.get_secret_value(),
             model=config.gigachat_model,
             scope=config.gigachat_scope,
             verify_ssl_certs=config.gigachat_verify_ssl_certs,
             ca_bundle_file=config.gigachat_ca_bundle_file,
         )
-        graph = build_graph(model)
         service = ChatService(
-            ChatStore(config.database_url), graph,
+            ChatStore(config.database_url.get_secret_value()),
+            build_graph(model),
             history_turns=config.chat_history_turns,
-            callback_factory=lambda: CallbackHandler(public_key=config.langfuse_public_key),
+            callback_factory=lambda: CallbackHandler(
+                public_key=config.langfuse_public_key.get_secret_value()
+            ),
         )
-        request_id = args.request_id or uuid4()
-        print(f"Request ID: {request_id}", file=sys.stderr)
-        reply = service.send_message(
-            user_id=user_id, session_key=session_key, request_id=request_id,
-            content=" ".join(args.question) or DEFAULT_QUESTION,
-        )
-        print(reply.content)
-        print(f"Session ID: {reply.session_id}")
-        print(f"Trace ID: {reply.trace_id}")
-        if reply.cached:
-            print("Cached response")
-    except (ChatRunFailedError, RequestConflictError, SessionBusyError, ValueError) as error:
-        raise SystemExit(str(error)) from None
+        print(f"Пользователь: {user_id}\nДиалог: {session_key}")
+        print("Для выхода введи /exit или нажми Ctrl+C.")
+        while True:
+            content = input("Вы: ").strip()
+            if content.lower() in {"/exit", "/quit"}:
+                break
+            if not content:
+                continue
+            try:
+                reply = service.send_message(
+                    user_id=user_id,
+                    session_key=session_key,
+                    request_id=uuid4(),
+                    content=content,
+                )
+                print(f"Ассистент: {reply.content}")
+            except (
+                ChatRunFailedError,
+                RequestConflictError,
+                SessionBusyError,
+                ValueError,
+            ) as error:
+                print(f"Ошибка: {error}", file=sys.stderr)
+    except (EOFError, KeyboardInterrupt):
+        print()
     finally:
-        # Drain the queue on success AND failure before the CLI process exits.
-        langfuse.shutdown()
+        try:
+            langfuse.shutdown()
+        finally:
+            if model is not None:
+                model._client.close()
 
 
 if __name__ == "__main__":

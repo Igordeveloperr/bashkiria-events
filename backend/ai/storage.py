@@ -3,7 +3,7 @@
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 import psycopg
@@ -46,7 +46,7 @@ class ChatStore:
         return psycopg.connect(
             self._database_url,
             autocommit=True,
-            row_factory=dict_row,
+            row_factory=cast(Any, dict_row),
             connect_timeout=5,
             **self._connection_options,
         )
@@ -67,14 +67,18 @@ class ChatStore:
                        ON CONFLICT (user_id, session_key) DO NOTHING""",
                     (uuid4(), user_id, session_key),
                 )
-                session = connection.execute(
+                session_row = connection.execute(
                     "SELECT * FROM chat_sessions WHERE user_id = %s AND session_key = %s",
                     (user_id, session_key),
                 ).fetchone()
+            if session_row is None:
+                raise RuntimeError("Не удалось создать или найти сессию")
+            session = cast(dict[str, Any], session_row)
             lock_id = int.from_bytes(session["id"].bytes[:8], "big", signed=True)
-            acquired = connection.execute(
+            acquired_row = connection.execute(
                 "SELECT pg_try_advisory_lock(%s) AS acquired", (lock_id,)
-            ).fetchone()["acquired"]
+            ).fetchone()
+            acquired = cast(dict[str, bool], acquired_row)["acquired"]
             if not acquired:
                 raise SessionBusyError("В этом диалоге уже формируется ответ; повтори позже")
             # Closing this dedicated connection releases the lock even on errors.
@@ -102,29 +106,33 @@ class ChatStore:
                    ORDER BY m.seq DESC LIMIT %s""",
                 (user_id, session_key, before_seq, before_seq, limit),
             ).fetchall()
-        return [Message(**row) for row in reversed(rows)]
+        return [Message(**cast(dict[str, Any], row)) for row in reversed(rows)]
 
     def sessions(self, user_id: str, *, limit: int = 50) -> list[dict]:
         validate_identity(user_id, "unused")
         if not 1 <= limit <= 200:
             raise ValueError("limit должен быть от 1 до 200")
         with self._connect() as connection:
-            return connection.execute(
+            rows = connection.execute(
                 """SELECT id, session_key, title, created_at, updated_at
                    FROM chat_sessions WHERE user_id = %s
                    ORDER BY updated_at DESC, id LIMIT %s""",
                 (user_id, limit),
             ).fetchall()
+        return cast(list[dict[str, Any]], rows)
 
     def run(self, user_id: str, session_key: str, request_id: UUID) -> dict | None:
         validate_identity(user_id, session_key)
         with self._connect() as connection:
-            return connection.execute(
-                """SELECT r.* FROM chat_runs r
-                   JOIN chat_sessions s ON s.id = r.session_id
-                   WHERE s.user_id = %s AND s.session_key = %s AND r.request_id = %s""",
-                (user_id, session_key, request_id),
-            ).fetchone()
+            return cast(
+                dict[str, Any] | None,
+                connection.execute(
+                    """SELECT r.* FROM chat_runs r
+                       JOIN chat_sessions s ON s.id = r.session_id
+                       WHERE s.user_id = %s AND s.session_key = %s AND r.request_id = %s""",
+                    (user_id, session_key, request_id),
+                ).fetchone(),
+            )
 
 
 class Conversation:

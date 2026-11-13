@@ -21,6 +21,7 @@ coverage/
 .env
 .env.*
 !.env.example
+.vscode/*
 !.env.*.example
 appsettings.Local.json
 appsettings.*.Local.json

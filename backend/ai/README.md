@@ -4,6 +4,9 @@ GigaChat (Сбер) → LangGraph → Langfuse.
 История хранится в PostgreSQL. `main.py` содержит граф и CLI, `chat.py` — сервис
 диалогов, `storage.py` — работу с БД, `history.py` — скользящее окно,
 `config.py` — параметры и загрузку `.env`, `prompts.py` — системный промпт.
+Конфигурация валидируется через Pydantic Settings; ключи и `DATABASE_URL` имеют
+тип `SecretStr` и маскируются при печати и JSON-сериализации. Перед передачей
+клиентам их значения извлекаются методом `get_secret_value()`.
 Граф пока состоит из одного узла `generate-response`; поиск ещё не подключён.
 
 1. В кабинете [GigaChat API](https://developers.sber.ru/docs/ru/gigachat/individuals-quickstart)
@@ -85,10 +88,12 @@ from storage import ChatStore
 from langfuse.langchain import CallbackHandler
 
 service = ChatService(
-    ChatStore(config.database_url),
+    ChatStore(config.database_url.get_secret_value()),
     graph,
     history_turns=config.chat_history_turns,
-    callback_factory=lambda: CallbackHandler(public_key=config.langfuse_public_key),
+    callback_factory=lambda: CallbackHandler(
+        public_key=config.langfuse_public_key.get_secret_value()
+    ),
 )
 reply = service.send_message(
     user_id=verified_user_id,

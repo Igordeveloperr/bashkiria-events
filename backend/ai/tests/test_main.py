@@ -35,14 +35,15 @@ class TracingTest(unittest.TestCase):
         config = load_config()
         self.exporter = InMemorySpanExporter()
         self.langfuse = Langfuse(
-            public_key=config.langfuse_public_key,
-            secret_key=config.langfuse_secret_key,
+            public_key=config.langfuse_public_key.get_secret_value(),
+            secret_key=config.langfuse_secret_key.get_secret_value(),
             tracer_provider=TracerProvider(),
             span_exporter=self.exporter,
         )
         self.addCleanup(self.langfuse.shutdown)
         model = GigaChat(
-            credentials=config.gigachat_credentials, model=config.gigachat_model
+            credentials=config.gigachat_credentials.get_secret_value(),
+            model=config.gigachat_model,
         )
         self.addCleanup(model._client.close)
         self.graph = build_graph(model)
