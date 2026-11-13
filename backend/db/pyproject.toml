@@ -1,0 +1,14 @@
+[project]
+name = "bashkiria-db"
+version = "0.1.0"
+description = "PostgreSQL schema migrations for Bashkiria events"
+requires-python = ">=3.11,<4"
+dependencies = [
+    "alembic>=1.20,<2",
+    "psycopg[binary]>=3.2,<4",
+    "python-dotenv==1.2.4",
+    "sqlalchemy>=2,<3",
+]
+
+[tool.uv]
+package = false
