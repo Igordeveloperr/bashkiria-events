@@ -1,65 +1,30 @@
-"""One LangGraph node calling Sber GigaChat, traced by Langfuse."""
+"""Persistent GigaChat conversations with a bounded model context."""
 
-import os
-import re
+import argparse
 import sys
-from pathlib import Path
+from uuid import UUID, uuid4
 
-from dotenv import load_dotenv
-
-# Load credentials before importing the tracing integration.
-load_dotenv(Path(__file__).with_name(".env"))
-
+# Import config first so .env is loaded before the tracing integration.
+from config import load_config
+from history import sliding_window
 from langchain_core.messages import SystemMessage
+from langchain_core.runnables import RunnableConfig
 from langchain_gigachat import GigaChat
 from langfuse import Langfuse
 from langfuse.langchain import CallbackHandler
-from langfuse.types import MaskOtelSpansResult, OtelSpanPatch
 from langgraph.graph import END, START, MessagesState, StateGraph
-
-PII = re.compile(
-    r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b"
-    r"|(?<!\w)(?:\+7|8)[\s(.-]*\d{3}[\s).-]*\d{3}[\s.-]*\d{2}[\s.-]*\d{2}(?!\w)"
-)
-SYSTEM_PROMPT = (
-    "Ты помощник по культурным событиям Башкортостана. Отвечай кратко по-русски. "
-    "Поиск событий пока не подключён: не выдумывай актуальные мероприятия, даты, "
-    "цены и ссылки. Уточни город, даты и интересы пользователя."
-)
-
-
-def mask_spans(*, params):
-    """Redact common PII and our API keys before telemetry leaves the process."""
-    secrets = [
-        os.getenv(key)
-        for key in (
-            "GIGACHAT_CREDENTIALS",
-            "LANGFUSE_SECRET_KEY",
-            "LANGFUSE_PUBLIC_KEY",
-        )
-    ]
-
-    def redact(value):
-        if isinstance(value, (tuple, list)):
-            return tuple(redact(item) for item in value)
-        if not isinstance(value, str):
-            return value
-        for secret in secrets:
-            if secret:
-                value = value.replace(secret, "[REDACTED]")
-        return PII.sub("[REDACTED]", value)
-
-    patches = {}
-    for identifier, span in params.spans.items():
-        changes = {key: redact(value) for key, value in span.attributes.items()}
-        patches[identifier] = OtelSpanPatch(set_attributes=changes)
-    return MaskOtelSpansResult(span_patches=patches)
+from prompts import DEFAULT_QUESTION, SYSTEM_PROMPT
+from storage import ChatStore, RequestConflictError, SessionBusyError
 
 
 def build_graph(model):
-    def generate_response(state: MessagesState):
+    def generate_response(state: MessagesState, config: RunnableConfig):
+        history_turns = config.get("configurable", {}).get("history_turns", 5)
         response = model.invoke(
-            [SystemMessage(content=SYSTEM_PROMPT), *state["messages"]],
+            [
+                SystemMessage(content=SYSTEM_PROMPT),
+                *sliding_window(state["messages"], history_turns),
+            ],
             config={"run_name": "generate-answer"},
         )
         return {"messages": [response]}
@@ -72,32 +37,58 @@ def build_graph(model):
 
 
 def main():
-    required = ("GIGACHAT_CREDENTIALS", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY")
-    missing = [key for key in required if not os.getenv(key, "").strip()]
-    if missing:
-        raise SystemExit("Заполни backend/ai/.env: " + ", ".join(missing))
+    from chat import ChatRunFailedError, ChatService
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--user-id", help="Verified user ID (or CHAT_USER_ID)")
+    parser.add_argument("--session-key", help="Conversation key (or CHAT_SESSION_ID)")
+    parser.add_argument("--request-id", type=UUID, help="Stable UUID for retries of this message")
+    parser.add_argument("question", nargs="*", help="Message text")
+    args = parser.parse_args()
+    try:
+        config = load_config()
+    except ValueError as error:
+        raise SystemExit(str(error)) from None
+
+    user_id = args.user_id or config.chat_user_id
+    session_key = args.session_key or config.chat_session_id
+    if not user_id or not session_key:
+        parser.error("Укажи --user-id и --session-key или CHAT_USER_ID и CHAT_SESSION_ID")
 
     langfuse = Langfuse(
-        environment=os.getenv("LANGFUSE_TRACING_ENVIRONMENT", "development"),
-        mask_otel_spans=mask_spans,
+        public_key=config.langfuse_public_key,
+        secret_key=config.langfuse_secret_key,
+        base_url=config.langfuse_base_url,
+        environment=config.langfuse_environment,
     )
-    handler = CallbackHandler()
     try:
-        # The SDK reads GIGACHAT_* settings from .env and obtains/refreshes its token.
-        model = GigaChat(model=os.getenv("GIGACHAT_MODEL", "GigaChat-2"), verify_ssl_certs=True)
-        graph = build_graph(model)
-        question = " ".join(sys.argv[1:]) or "Помоги выбрать мероприятие в Уфе"
-        result = graph.invoke(
-            {"messages": [("user", question)]},
-            config={
-                "callbacks": [handler],
-                "run_name": "recommend-events",
-                "tags": ["bashkiria-events"],
-                "metadata": {"langfuse_session_id": os.getenv("CHAT_SESSION_ID", "")},
-            },
+        # The SDK obtains and refreshes its access token using these credentials.
+        model = GigaChat(
+            credentials=config.gigachat_credentials,
+            model=config.gigachat_model,
+            scope=config.gigachat_scope,
+            verify_ssl_certs=config.gigachat_verify_ssl_certs,
+            ca_bundle_file=config.gigachat_ca_bundle_file,
         )
-        print(result["messages"][-1].content)
-        print(f"Trace ID: {handler.last_trace_id}")
+        graph = build_graph(model)
+        service = ChatService(
+            ChatStore(config.database_url), graph,
+            history_turns=config.chat_history_turns,
+            callback_factory=lambda: CallbackHandler(public_key=config.langfuse_public_key),
+        )
+        request_id = args.request_id or uuid4()
+        print(f"Request ID: {request_id}", file=sys.stderr)
+        reply = service.send_message(
+            user_id=user_id, session_key=session_key, request_id=request_id,
+            content=" ".join(args.question) or DEFAULT_QUESTION,
+        )
+        print(reply.content)
+        print(f"Session ID: {reply.session_id}")
+        print(f"Trace ID: {reply.trace_id}")
+        if reply.cached:
+            print("Cached response")
+    except (ChatRunFailedError, RequestConflictError, SessionBusyError, ValueError) as error:
+        raise SystemExit(str(error)) from None
     finally:
         # Drain the queue on success AND failure before the CLI process exits.
         langfuse.shutdown()
