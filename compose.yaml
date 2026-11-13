@@ -1,5 +1,5 @@
 # Keep the project name so moving this file preserves the existing database volume.
-name: bashkiria-db
+name: bashkiria-events
 
 services:
   postgres:
