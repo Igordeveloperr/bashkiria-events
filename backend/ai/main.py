@@ -2,12 +2,13 @@
 
 import argparse
 import sys
+from contextlib import contextmanager
 from uuid import uuid4
 
 from chat import ChatRunFailedError, ChatService
 
 # Import config first so .env is loaded before the tracing integration.
-from config import load_config
+from config import Config, load_config
 from history import sliding_window
 from langchain_core.messages import SystemMessage
 from langchain_core.runnables import RunnableConfig
@@ -36,6 +37,40 @@ def build_graph(model):
     graph.add_edge(START, "generate-response")
     graph.add_edge("generate-response", END)
     return graph.compile()
+
+
+@contextmanager
+def create_chat_service(config: Config):
+    """Share model/tracing setup and cleanup between HTTP and the CLI."""
+    langfuse = Langfuse(
+        public_key=config.langfuse_public_key.get_secret_value(),
+        secret_key=config.langfuse_secret_key.get_secret_value(),
+        base_url=config.langfuse_base_url,
+        environment=config.langfuse_environment,
+    )
+    model = None
+    try:
+        model = GigaChat(
+            credentials=config.gigachat_credentials.get_secret_value(),
+            model=config.gigachat_model,
+            scope=config.gigachat_scope,
+            verify_ssl_certs=config.gigachat_verify_ssl_certs,
+            ca_bundle_file=config.gigachat_ca_bundle_file,
+        )
+        yield ChatService(
+            ChatStore(config.database_url.get_secret_value()),
+            build_graph(model),
+            history_turns=config.chat_history_turns,
+            callback_factory=lambda: CallbackHandler(
+                public_key=config.langfuse_public_key.get_secret_value()
+            ),
+        )
+    finally:
+        try:
+            langfuse.shutdown()
+        finally:
+            if model is not None:
+                model._client.close()
 
 
 def main(argv=None):
@@ -67,60 +102,33 @@ def main(argv=None):
     except ValueError as error:
         parser.error(str(error))
 
-    langfuse = Langfuse(
-        public_key=config.langfuse_public_key.get_secret_value(),
-        secret_key=config.langfuse_secret_key.get_secret_value(),
-        base_url=config.langfuse_base_url,
-        environment=config.langfuse_environment,
-    )
-    model = None
     try:
-        model = GigaChat(
-            credentials=config.gigachat_credentials.get_secret_value(),
-            model=config.gigachat_model,
-            scope=config.gigachat_scope,
-            verify_ssl_certs=config.gigachat_verify_ssl_certs,
-            ca_bundle_file=config.gigachat_ca_bundle_file,
-        )
-        service = ChatService(
-            ChatStore(config.database_url.get_secret_value()),
-            build_graph(model),
-            history_turns=config.chat_history_turns,
-            callback_factory=lambda: CallbackHandler(
-                public_key=config.langfuse_public_key.get_secret_value()
-            ),
-        )
-        print(f"Пользователь: {user_id}\nДиалог: {session_key}")
-        print("Для выхода введи /exit или нажми Ctrl+C.")
-        while True:
-            content = input("Вы: ").strip()
-            if content.lower() in {"/exit", "/quit"}:
-                break
-            if not content:
-                continue
-            try:
-                reply = service.send_message(
-                    user_id=user_id,
-                    session_key=session_key,
-                    request_id=uuid4(),
-                    content=content,
-                )
-                print(f"Ассистент: {reply.content}")
-            except (
-                ChatRunFailedError,
-                RequestConflictError,
-                SessionBusyError,
-                ValueError,
-            ) as error:
-                print(f"Ошибка: {error}", file=sys.stderr)
+        with create_chat_service(config) as service:
+            print(f"Пользователь: {user_id}\nДиалог: {session_key}")
+            print("Для выхода введи /exit или нажми Ctrl+C.")
+            while True:
+                content = input("Вы: ").strip()
+                if content.lower() in {"/exit", "/quit"}:
+                    break
+                if not content:
+                    continue
+                try:
+                    reply = service.send_message(
+                        user_id=user_id,
+                        session_key=session_key,
+                        request_id=uuid4(),
+                        content=content,
+                    )
+                    print(f"Ассистент: {reply.content}")
+                except (
+                    ChatRunFailedError,
+                    RequestConflictError,
+                    SessionBusyError,
+                    ValueError,
+                ) as error:
+                    print(f"Ошибка: {error}", file=sys.stderr)
     except (EOFError, KeyboardInterrupt):
         print()
-    finally:
-        try:
-            langfuse.shutdown()
-        finally:
-            if model is not None:
-                model._client.close()
 
 
 if __name__ == "__main__":

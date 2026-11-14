@@ -1,4 +1,4 @@
-"""Conversation service for a CLI or an authenticated HTTP backend."""
+"""Conversation service shared by the CLI and HTTP API."""
 
 import logging
 from dataclasses import dataclass
@@ -40,7 +40,7 @@ class ChatService:
     def send_message(
         self, *, user_id: str, session_key: str, request_id: UUID, content: str
     ) -> ChatReply:
-        """user_id must come from a verified identity at the HTTP boundary.
+        """The caller supplies user_id and the external conversation key.
 
         Reusing a request ID replays its result/status. To try again after a
         failed run, the caller must submit a new request ID.

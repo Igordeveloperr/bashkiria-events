@@ -128,6 +128,39 @@ class PostgresChatTest(unittest.TestCase):
         self.assertIsNone(self.store.run(self.user + "-unknown", self.key, request_id))
         self.assertEqual(self.store.history(self.user, self.key)[0].content, "first owner")
 
+    def test_http_round_trip_persists_history_replays_and_isolates_frontend_ids(self):
+        from api import create_app
+        from fastapi.testclient import TestClient
+
+        payload = {
+            "user_id": self.user, "session_id": self.key,
+            "message": "first question", "request_id": str(uuid4()),
+        }
+        with TestClient(create_app(self.service, cors_origins=[])) as client:
+            first = client.post("/api/chat", json=payload)
+            self.assertEqual(first.status_code, 200)
+            replay = client.post("/api/chat", json=payload)
+            self.assertEqual(replay.status_code, 200)
+            self.assertTrue(replay.json()["cached"])
+            self.assertEqual(replay.json()["run_id"], first.json()["run_id"])
+            self.assertEqual(len(self.model.calls), 1)
+            conflict = client.post("/api/chat", json={**payload, "message": "changed"})
+            self.assertEqual(conflict.status_code, 409)
+            self.assertEqual(conflict.json()["detail"]["code"], "request_conflict")
+
+            second = client.post("/api/chat", json={**payload, "request_id": str(uuid4()), "message": "next question"})
+            self.assertEqual(second.status_code, 200)
+            self.assertEqual(second.json()["session_id"], self.key)
+            self.assertEqual([m.content for m in self.model.calls[-1]][1:], [
+                "first question", "Ответ: first question", "next question",
+            ])
+
+            other = client.post("/api/chat", json={**payload, "user_id": self.user + "-other"})
+            self.assertEqual(other.status_code, 200)
+            self.assertFalse(other.json()["cached"])
+            self.assertEqual([m.content for m in self.model.calls[-1]][1:], ["first question"])
+            self.assertEqual(len(self.store.history(self.user, self.key)), 4)
+
     def test_failed_request_is_not_reexecuted_or_used_as_context(self):
         request_id = uuid4()
         self.model.error = RuntimeError("Provider unavailable")

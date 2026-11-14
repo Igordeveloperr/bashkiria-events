@@ -11,7 +11,7 @@ BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
 
 
-class Config(BaseSettings):
+class ApiConfig(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=BASE_DIR / ".env",
         env_file_encoding="utf-8",
@@ -22,6 +22,15 @@ class Config(BaseSettings):
         hide_input_in_errors=True,
     )
 
+    api_cors_origins: list[str] = Field(default_factory=lambda: [
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:5173",
+    ])
+
+
+class Config(ApiConfig):
     gigachat_credentials: SecretStr = Field(min_length=1)
     langfuse_public_key: SecretStr = Field(min_length=1)
     langfuse_secret_key: SecretStr = Field(min_length=1)

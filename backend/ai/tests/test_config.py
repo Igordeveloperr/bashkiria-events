@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from pydantic import SecretStr, ValidationError
 
-from config import Config, load_config
+from config import ApiConfig, Config, load_config
 
 
 class ConfigTest(unittest.TestCase):
@@ -126,3 +126,9 @@ class ConfigTest(unittest.TestCase):
         config = load_config()
         with self.assertRaises(ValidationError):
             config.chat_history_turns = 10
+
+    def test_cors_origins_load_from_json_without_model_credentials(self):
+        with patch.dict(os.environ, {"API_CORS_ORIGINS": '["https://events.example"]'}, clear=True):
+            self.assertEqual(
+                ApiConfig(_env_file=None).api_cors_origins, ["https://events.example"]
+            )

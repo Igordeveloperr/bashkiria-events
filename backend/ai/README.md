@@ -1,13 +1,16 @@
 # Сервис ИИ
 
 GigaChat (Сбер) → LangGraph → Langfuse.
-История хранится в PostgreSQL. `main.py` содержит граф и CLI, `chat.py` — сервис
+История хранится в PostgreSQL. `api.py` содержит HTTP API, `main.py` — граф и CLI, `chat.py` — сервис
 диалогов, `storage.py` — работу с БД, `history.py` — скользящее окно,
 `config.py` — параметры и загрузку `.env`, `prompts.py` — системный промпт.
 Конфигурация валидируется через Pydantic Settings; ключи и `DATABASE_URL` имеют
 тип `SecretStr` и маскируются при печати и JSON-сериализации. Перед передачей
 клиентам их значения извлекаются методом `get_secret_value()`.
 Граф пока состоит из одного узла `generate-response`; поиск ещё не подключён.
+В `tools.py` находятся шесть функций с `@tool` без реализации; аргументы выводятся
+из сигнатур и docstring. Модели данных и результатов находятся в `models.py`.
+Контракты описаны в [TOOLS.md](TOOLS.md).
 
 1. В кабинете [GigaChat API](https://developers.sber.ru/docs/ru/gigachat/individuals-quickstart)
    получи **ключ авторизации**. Он пойдёт в `GIGACHAT_CREDENTIALS`;
@@ -36,14 +39,13 @@ GigaChat (Сбер) → LangGraph → Langfuse.
    Одноразовый сервис `migrate` ждёт готовности PostgreSQL, выполняет
    `alembic upgrade head` и завершается. Повторный запуск применяет только новые
    ревизии. Схема меняется миграциями, а не при каждом сообщении.
-6. Запускай из `backend/ai`:
+6. Запусти HTTP API из `backend/ai`:
 
    ```powershell
-   uv run --frozen python main.py --user-id user-001 --session-key chat-001 "Помоги подобрать концерт в Уфе"
-   uv run --frozen python main.py --user-id user-001 --session-key chat-001 "А что есть бесплатного?"
+   uv run --frozen uvicorn api:app --host 127.0.0.1 --port 8001
    ```
 
-В Langfuse открой трассы и найди `recommend-events` по напечатанному Trace ID.
+В Langfuse открой трассы и найди `recommend-events` по `trace_id` из HTTP-ответа.
 Будут видны узел графа, запрос/ответ, модель, токены, время и ошибки.
 Стоимость GigaChat потребует настройки цены модели в Langfuse, если её нет в каталоге.
 Запросы группируются в Langfuse по внутреннему UUID диалога из PG; передаётся также
@@ -53,10 +55,10 @@ GigaChat (Сбер) → LangGraph → Langfuse.
 Интерактивный чат из `backend/ai`:
 
 ```powershell
-uv run --frozen python chat.py --user-id user-001 --session-key chat-001
+uv run --frozen python main.py --user-id user-001 --session-key chat-001
 ```
 
-Можно запустить просто `uv run --frozen python chat.py`: недостающие ID будут
+Можно запустить просто `uv run --frozen python main.py`: недостающие ID будут
 запрошены в терминале. Пустой ключ диалога создаёт новый UUID. Сообщения вводятся
 по одному; `/exit`, `/quit`, Ctrl+C или конец ввода завершают чат. После ошибки
 отдельного запроса можно продолжить переписку. Для продолжения истории после
@@ -76,44 +78,105 @@ uv run --frozen python chat.py --user-id user-001 --session-key chat-001
 следующего запроса не включаются. Размер истории, загружаемой из PG, также ограничен
 окном; полную переписку для интерфейса можно получать отдельно с пагинацией.
 
-## Подключение к backend для фронта
+## HTTP API для фронтенда
 
-HTTP API и авторизация в этом репозитории пока не реализованы. Готовый сервис
-принимает идентификаторы от вызывающего backend:
+API работает на `http://localhost:8001`. Интерактивная документация доступна на
+`/docs`, OpenAPI — на `/openapi.json`, проверка процесса — `GET /health`.
+Конфигурация, модель и клиент Langfuse создаются один раз при старте и закрываются
+при остановке. Синхронные вызовы БД и модели выполняются в пуле потоков FastAPI.
 
-```python
-from uuid import UUID
-from chat import ChatService
-from storage import ChatStore
-from langfuse.langchain import CallbackHandler
+`POST /api/chat` принимает JSON:
 
-service = ChatService(
-    ChatStore(config.database_url.get_secret_value()),
-    graph,
-    history_turns=config.chat_history_turns,
-    callback_factory=lambda: CallbackHandler(
-        public_key=config.langfuse_public_key.get_secret_value()
-    ),
-)
-reply = service.send_message(
-    user_id=verified_user_id,
-    session_key=payload.session_key,
-    request_id=UUID(payload.request_id),
-    content=payload.content,
-)
+```json
+{
+  "user_id": "user-001",
+  "session_id": "chat-001",
+  "message": "Помоги подобрать концерт в Уфе",
+  "request_id": "23b0914b-a8bf-4df0-829c-cc001f3d1a53"
+}
 ```
 
-`user_id` здесь — строковый ID из проверенной авторизации. Нельзя без проверки
-подставлять ID из тела запроса. `session_key` обозначает отдельный диалог,
-а не сессию входа; его уникальность ограничена пользователем. Поэтому одинаковые
-ключи разных пользователей создают разные внутренние UUID.
+Обязательные поля — `user_id`, `session_id` и `message`. Идентификаторы — непустые
+строки до 200 символов; сообщение должно содержать хотя бы один непробельный символ.
+`request_id` — необязательный UUID: если его не передали, сервер создаст и вернёт его.
+При сетевых повторах фронту следует передавать собственный стабильный UUID.
+Текст сообщения сохраняется без обрезки пробелов.
+
+Успешный ответ (`200`):
+
+```json
+{
+  "user_id": "user-001",
+  "session_id": "chat-001",
+  "request_id": "23b0914b-a8bf-4df0-829c-cc001f3d1a53",
+  "run_id": "60eab5ad-7dcf-4f76-a28b-5f5c0692fb46",
+  "reply": "На какие даты ищешь концерт?",
+  "trace_id": null,
+  "cached": false
+}
+```
+
+`session_id` в HTTP — внешний ключ диалога с фронта. Внутри он передаётся в
+`ChatService` как `session_key`; UUID записи в PostgreSQL и сессия Langfuse остаются
+внутренними. Одинаковые ключи разных пользователей создают разные диалоги.
+В ответе возвращается тот же внешний `session_id`. `trace_id` содержит ID трассы,
+когда он доступен, иначе `null`.
+
+Текущий API принимает `user_id` из тела запроса и доверяет этому значению;
+авторизация в этом прототипе не реализована.
+
+Пример вызова с фронта:
+
+```javascript
+const requestId = crypto.randomUUID(); // сохрани для повторов этого сообщения
+const response = await fetch("http://localhost:8001/api/chat", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    user_id: userId,
+    session_id: sessionId,
+    message: "Что посмотреть в Уфе?",
+    request_id: requestId,
+  }),
+});
+const data = await response.json();
+if (!response.ok) throw new Error(data.detail?.message ?? "Ошибка запроса");
+console.log(data.reply);
+```
+
+По умолчанию CORS разрешает `localhost` и `127.0.0.1` на портах `3000` и `5173`.
+Для другого адреса фронта задай JSON-массив в `backend/ai/.env` и перезапусти API:
+
+```dotenv
+API_CORS_ORIGINS=["https://events.example"]
+```
+
+Ошибки API:
+
+| HTTP | `detail.code` | Значение |
+| --- | --- | --- |
+| 409 | `session_busy` | В диалоге уже формируется ответ; повтори позже |
+| 409 | `request_conflict` | Этот `request_id` использован с другим текстом |
+| 422 | стандартный `detail` FastAPI | Некорректный JSON или поля запроса |
+| 502 | `generation_failed` | Генерация не удалась; для новой попытки нужен новый `request_id` |
+| 503 | `storage_unavailable` | Хранилище переписки недоступно |
+
+Ошибки сервиса имеют вид `{"detail": {"code": "...", "message": "...", "request_id": "..."}}`.
+Для ошибки генерации также возвращается `run_id`. Внутренний текст ошибки модели
+или БД клиенту не передаётся.
+
+`GET /api/tools` возвращает шесть контрактов с `name`, `description`, JSON Schema
+аргументов (`parameters`) и результата (`returns`), а также `implemented: false`.
+Прототипы не подключены к графу и не вызываются во время чата.
+
+## Повторы и работа с историей
 
 Для каждого нового сообщения фронт генерирует `request_id` (UUID) и сохраняет его
-при сетевых повторах. Успешный повтор возвращает прежний ответ с `cached=True`,
+при сетевых повторах. Успешный повтор возвращает прежний ответ с `cached: true`,
 не вызывает модель и не добавляет строки. Повтор с другим текстом вызывает
 `RequestConflictError`. Неудачный запрос сохраняет статус `failed`; повтор с тем же
 UUID возвращает `ChatRunFailedError`. Чтобы заново запустить генерацию после ошибки,
-нужен новый `request_id`. CLI печатает UUID до вызова и принимает `--request-id`.
+нужен новый `request_id`.
 
 На время генерации отдельное соединение удерживает advisory lock диалога.
 Параллельный запрос в этот диалог получает `SessionBusyError` и может повториться
@@ -126,10 +189,10 @@ transaction pooling с такими блокировками несовмест�
 Чтение для интерфейса также ограничено владельцем:
 
 ```python
-store.sessions(verified_user_id, limit=50)
-store.history(verified_user_id, session_key, limit=50)
-store.history(verified_user_id, session_key, limit=50, before_seq=oldest_seq)
-store.run(verified_user_id, session_key, request_id)
+store.sessions(user_id, limit=50)
+store.history(user_id, session_key, limit=50)
+store.history(user_id, session_key, limit=50, before_seq=oldest_seq)
+store.run(user_id, session_key, request_id)
 ```
 
 Страница истории возвращается в порядке возрастания `seq`; для предыдущей страницы
@@ -152,7 +215,7 @@ in certificate chain` означает, что Python не доверяет се
 GIGACHAT_CA_BUNDLE_FILE=certs/russian_trusted_root_ca_pem.crt
 ```
 
-Затем перезапусти `main.py`. Путь может быть абсолютным; относительный путь считается
+Затем перезапусти HTTP API или CLI. Путь может быть абсолютным; относительный путь считается
 от `backend/ai`, независимо от каталога запуска. Если файл не найден, конфигурация
 сообщит об этом до обращения к API. Проверка TLS остаётся включённой.
 Если соединение проходит через корпоративный прокси или антивирус с подменой
@@ -166,7 +229,8 @@ GIGACHAT_CA_BUNDLE_FILE=certs/russian_trusted_root_ca_pem.crt
 
 ## Проверки
 
-Проверка окна, конфигурации, графа и экспорта без внешних API:
+Проверка HTTP API, CORS, контрактов инструментов, окна, конфигурации, графа и экспорта
+без внешних API:
 
 ```powershell
 uv run --frozen python -m unittest discover -s tests -v
@@ -176,7 +240,7 @@ uv run --frozen python -m unittest discover -s tests -v
 в окружении или `.env` и выполни ту же команду. Тесты создают случайную схему,
 применяют миграцию и удаляют только эту схему после завершения. Без этой переменной
 проверки PG пропускаются. Проверяются сохранность полной истории, размер окна,
-изоляция пользователей, повторные запросы, пагинация, блокировки, сбой процесса
+изоляция пользователей, HTTP-запросы с историей и повторами, пагинация, блокировки, сбой процесса
 и атомарность сохранения ответа.
 
 Для self-hosted Langfuse SDK 5 требует сервер версии 4.59.0+.
