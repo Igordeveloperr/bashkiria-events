@@ -34,3 +34,6 @@ logs/
 .DS_Store
 Thumbs.db
 Desktop.ini
+
+# Python cache
+*.pyc

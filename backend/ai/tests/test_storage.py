@@ -71,7 +71,7 @@ class PostgresChatTest(unittest.TestCase):
         migrate(self.database_url)
         with psycopg.connect(self.database_url) as connection:
             version = connection.execute("SELECT version_num FROM alembic_version").fetchone()
-        self.assertEqual(version, ("0001_chat_history",))
+        self.assertEqual(version, ("0007_merge_service_heads",))
 
     def test_history_survives_new_service_and_window_does_not_delete_messages(self):
         for i in range(8):
@@ -127,6 +127,39 @@ class PostgresChatTest(unittest.TestCase):
         self.assertEqual(self.store.history(self.user + "-unknown", self.key), [])
         self.assertIsNone(self.store.run(self.user + "-unknown", self.key, request_id))
         self.assertEqual(self.store.history(self.user, self.key)[0].content, "first owner")
+
+    def test_http_round_trip_persists_history_replays_and_isolates_frontend_ids(self):
+        from api import create_app
+        from fastapi.testclient import TestClient
+
+        payload = {
+            "user_id": self.user, "session_id": self.key,
+            "message": "first question", "request_id": str(uuid4()),
+        }
+        with TestClient(create_app(self.service, cors_origins=[])) as client:
+            first = client.post("/api/chat", json=payload)
+            self.assertEqual(first.status_code, 200)
+            replay = client.post("/api/chat", json=payload)
+            self.assertEqual(replay.status_code, 200)
+            self.assertTrue(replay.json()["cached"])
+            self.assertEqual(replay.json()["run_id"], first.json()["run_id"])
+            self.assertEqual(len(self.model.calls), 1)
+            conflict = client.post("/api/chat", json={**payload, "message": "changed"})
+            self.assertEqual(conflict.status_code, 409)
+            self.assertEqual(conflict.json()["detail"]["code"], "request_conflict")
+
+            second = client.post("/api/chat", json={**payload, "request_id": str(uuid4()), "message": "next question"})
+            self.assertEqual(second.status_code, 200)
+            self.assertEqual(second.json()["session_id"], self.key)
+            self.assertEqual([m.content for m in self.model.calls[-1]][1:], [
+                "first question", "Ответ: first question", "next question",
+            ])
+
+            other = client.post("/api/chat", json={**payload, "user_id": self.user + "-other"})
+            self.assertEqual(other.status_code, 200)
+            self.assertFalse(other.json()["cached"])
+            self.assertEqual([m.content for m in self.model.calls[-1]][1:], ["first question"])
+            self.assertEqual(len(self.store.history(self.user, self.key)), 4)
 
     def test_failed_request_is_not_reexecuted_or_used_as_context(self):
         request_id = uuid4()
@@ -203,7 +236,7 @@ class PostgresChatTest(unittest.TestCase):
         for content in ("", "   "):
             with self.subTest(content=content), self.assertRaises(ValueError):
                 self.send(content)
-        with self.assertRaises(ValueError):
+        with self.assertRaises(TypeError):
             self.send("hello", request_id="not-a-uuid")
         with self.assertRaises(ValueError):
             self.send("hello", user_id=" ")

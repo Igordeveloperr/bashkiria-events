@@ -26,6 +26,8 @@ services:
         condition: service_started
       searcher:
         condition: service_healthy
+      agent:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "traefik", "healthcheck", "--ping", "--ping.entrypoint=web", "--entrypoints.web.address=:80"]
       interval: 10s
@@ -183,6 +185,57 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - backend
+
+  agent:
+    build:
+      context: ./backend/ai
+    env_file:
+      - path: ./backend/ai/.env
+        required: false
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-bashkiria}:${POSTGRES_PASSWORD:-bashkiria}@postgres:5432/${POSTGRES_DB:-bashkiria}
+      SEARCHER_BASE_URL: http://searcher:8080
+      PARSER_BASE_URL: http://parser:8080
+      INTERACTION_BASE_URL: http://interaction:8080
+      PARSER_API_KEY: ${PARSER_API_KEY:-}
+      INTERACTION_API_KEY: ${INTERACTION_API_KEY:-}
+      UVICORN_ROOT_PATH: /ai
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${COMPOSE_PROJECT_NAME:-bashkiria-events}_backend
+      traefik.http.routers.agent.rule: 'Path(`/ai`) || PathPrefix(`/ai/`)'
+      traefik.http.routers.agent.entrypoints: web
+      traefik.http.routers.agent.service: agent
+      traefik.http.routers.agent.middlewares: agent-prefix
+      traefik.http.middlewares.agent-prefix.stripprefix.prefixes: /ai
+      traefik.http.services.agent.loadbalancer.server.port: "8080"
+      traefik.http.services.agent.loadbalancer.healthcheck.path: /health
+      traefik.http.services.agent.loadbalancer.healthcheck.interval: 10s
+      traefik.http.services.agent.loadbalancer.healthcheck.timeout: 3s
+    ports:
+      - "127.0.0.1:${AGENT_HTTP_PORT:-8001}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      searcher:
+        condition: service_healthy
+      parser:
+        condition: service_started
+        required: false
+      interaction:
+        condition: service_started
+        required: false
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)"]
       interval: 10s

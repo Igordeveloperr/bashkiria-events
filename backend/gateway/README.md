@@ -2,7 +2,7 @@
 
 Traefik v3.7, Docker provider. Единственная внешняя точка входа —
 `http://127.0.0.1:8080`; порт меняется через GATEWAY_HTTP_PORT в корневом `.env`.
-Сейчас маршрутизируются parser, interaction и searcher.
+Маршрутизируются parser, interaction, searcher и AI (`agent`).
 
 ## Запуск
 
@@ -12,8 +12,11 @@ Traefik v3.7, Docker provider. Единственная внешняя точк�
 docker compose --profile gateway up -d --build --wait
 ```
 
-Профиль gateway включает парсер и interaction, запускает поиск, PostgreSQL,
-миграции и Traefik. Gateway ждёт запуска зависимостей; Traefik дополнительно
+Перед запуском заполни ключи GigaChat и Langfuse в `backend/ai/.env`
+по [инструкции AI](../ai/README.md).
+
+Профиль gateway включает парсер и interaction, запускает поиск, AI, PostgreSQL,
+миграции и Traefik. Gateway ждёт готовности поиска и AI и запуска остальных зависимостей; Traefik дополнительно
 проверяет readiness каждого backend. Сеть и том существующей БД сохраняются.
 Для текущей локальной БД корневой `.env` задаёт COMPOSE_PROJECT_NAME=bashkiria-db.
 На новой машине без этого переопределения применяется имя из compose.yaml.
@@ -25,6 +28,7 @@ docker compose --profile gateway up -d --build --wait
 | `/api/v1/parser` и `/api/v1/parser/...` | parser:8080 | Без изменения |
 | `/api/v1/interaction` и `/api/v1/interaction/...` | interaction:8080 | Без изменения |
 | `/search/...` | searcher:8080 | Удаляется `/search` |
+| `/ai/...` | agent:8080 | Удаляется `/ai` |
 | `/parser/health` | parser:8080/health | Удаляется `/parser` |
 | `/parser/health/ready` | parser:8080/health/ready | Удаляется `/parser` |
 | `/parser/openapi/v1.json` | parser:8080/openapi/v1.json | Удаляется `/parser` |
@@ -39,8 +43,16 @@ OpenAPI: `/search/openapi.json`. Searcher получает ROOT_PATH=/search в 
 чтобы Swagger правильно загружал спецификацию и выполнял запросы через Gateway.
 При локальном запуске ROOT_PATH пустой. Внутренние пути поискового API не меняются.
 
+AI: `POST /ai/api/chat`, `GET /ai/api/tools`, `GET /ai/health`.
+Swagger: `/ai/docs`, OpenAPI: `/ai/openapi.json`, ReDoc: `/ai/redoc`.
+Compose задаёт Uvicorn переменную `UVICORN_ROOT_PATH=/ai`, чтобы документация
+загружала спецификацию и выполняла запросы через Gateway. Внутренние пути AI
+остаются `/api/chat`, `/api/tools` и `/health`; локальный запуск без Compose
+использует пустой root path. Прямой порт агента сохраняется для вызовов API,
+а документацию контейнера следует открывать через Gateway.
+
 Query string и заголовки передаются backend без изменения. Правила проверяют
-границу сегмента: например, `/api/v1/parser-other` и `/search-other` не совпадают.
+границу сегмента: например, `/api/v1/parser-other`, `/search-other` и `/ai-other` не совпадают.
 Неизвестный маршрут получает 404 Traefik; недоступный backend — ошибку Gateway.
 Ответы работающего сервиса, в том числе его формат ошибок, сохраняются.
 Traefik не приводит ошибки разных backend к одному JSON-контракту.
@@ -63,6 +75,7 @@ Traefik не хранит ключи в labels и не подставляет и
 | Interaction /admin | X-Interaction-Admin-Key = INTERACTION_ADMIN_API_KEY |
 | Interaction /deliveries | X-Interaction-Delivery-Key = INTERACTION_DELIVERY_API_KEY |
 | Searcher | Ключ не требуется |
+| AI | Ключ не требуется; текущий прототип доверяет `user_id` в JSON |
 
 Ключи берутся из корневого `.env` для Docker. Локальные запуски используют
 соответствующие `backend/parser/.env`, `backend/interactionService/.env` и
@@ -80,7 +93,7 @@ localhost; HTTPS/домен для внешнего развёртывания �
 Traefik видит только контейнеры своего Compose-проекта с traefik.enable=true.
 Порт backend явно задан как 8080. Dashboard отключён. Docker socket смонтирован
 как в исходной конфигурации — read-only; секретов в labels нет.
-Прямые порты 5164, 5266 и 8000 сохранены на localhost для отладки. Если запускаешь
+Прямые порты 5164, 5266, 8000 и 8001 (AGENT_HTTP_PORT) сохранены на localhost для отладки. Если запускаешь
 те же приложения в Visual Studio, останови Docker-экземпляр либо выбери разные порты.
 
 Миграция 0007_merge_service_heads объединяет независимые вершины 0006 без DDL.
@@ -100,6 +113,8 @@ Invoke-RestMethod "$base/api/v1/parser/events?page=1&pageSize=10" -Headers $pars
 $userHeaders = @{ 'X-Interaction-Key' = 'КЛЮЧ_ШЛЮЗА'; 'X-User-Id' = 'telegram:12345' }
 Invoke-RestMethod "$base/api/v1/interaction/me/subscriptions" -Headers $userHeaders |
     ConvertTo-Json -Depth 8
+# Контракты инструментов AI без вызова модели:
+Invoke-RestMethod "$base/ai/api/tools" | ConvertTo-Json -Depth 8
 ```
 
 Проверки:
@@ -111,8 +126,9 @@ docker compose --profile gateway ps
 ```
 
 Проверочный скрипт читает ключи из конфигурации Compose в память, не печатает их
-и не изменяет карточки, подписки или обращения. Проверяет все три маршрута,
-Swagger/OpenAPI, отсутствие автоматического обхода авторизации и границы префиксов.
+и не изменяет карточки, подписки, обращения или историю чата. Проверяет все четыре сервиса,
+Swagger/OpenAPI/ReDoc, контракт инструментов AI, валидацию запроса чата,
+отсутствие автоматического обхода авторизации и границы префиксов. Модель не вызывается.
 
 Документация Traefik: [Docker provider](https://doc.traefik.io/traefik/v3.7/reference/install-configuration/providers/docker/),
 [StripPrefix](https://doc.traefik.io/traefik/v3.7/reference/routing-configuration/http/middlewares/stripprefix/).

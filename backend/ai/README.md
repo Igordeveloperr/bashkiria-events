@@ -1,13 +1,20 @@
 # Сервис ИИ
 
 GigaChat (Сбер) → LangGraph → Langfuse.
-История хранится в PostgreSQL. `main.py` содержит граф и CLI, `chat.py` — сервис
+История хранится в PostgreSQL. `api.py` содержит HTTP API, `main.py` — граф и CLI, `chat.py` — сервис
 диалогов, `storage.py` — работу с БД, `history.py` — скользящее окно,
 `config.py` — параметры и загрузку `.env`, `prompts.py` — системный промпт.
 Конфигурация валидируется через Pydantic Settings; ключи и `DATABASE_URL` имеют
 тип `SecretStr` и маскируются при печати и JSON-сериализации. Перед передачей
 клиентам их значения извлекаются методом `get_secret_value()`.
-Граф пока состоит из одного узла `generate-response`; поиск ещё не подключён.
+Граф чередует `generate-response` и выполнение инструментов до итогового ответа.
+В `tools.py` реализованы шесть функций с `@tool`; аргументы выводятся
+из сигнатур и docstring. HTTP-адаптеры сервисов находятся в `tool_backend.py`,
+модели данных и результатов — в `models.py`.
+Контракты описаны в [TOOLS.md](TOOLS.md).
+Перед привязкой инструментов к GigaChat из их схем удаляются неподдерживаемые
+значения `format` (например, `uuid`); `date`, `date-time` и `time` сохраняются.
+Типы и проверка аргументов при выполнении инструментов остаются в Pydantic.
 
 1. В кабинете [GigaChat API](https://developers.sber.ru/docs/ru/gigachat/individuals-quickstart)
    получи **ключ авторизации**. Он пойдёт в `GIGACHAT_CREDENTIALS`;
@@ -28,7 +35,7 @@ GigaChat (Сбер) → LangGraph → Langfuse.
 5. Подними PostgreSQL и примени миграции Alembic из корня репозитория:
 
    ```powershell
-   docker compose up -d --build
+   docker compose up -d --build postgres migrate
    docker compose wait migrate
    docker compose logs migrate
    ```
@@ -36,14 +43,13 @@ GigaChat (Сбер) → LangGraph → Langfuse.
    Одноразовый сервис `migrate` ждёт готовности PostgreSQL, выполняет
    `alembic upgrade head` и завершается. Повторный запуск применяет только новые
    ревизии. Схема меняется миграциями, а не при каждом сообщении.
-6. Запускай из `backend/ai`:
+6. Запусти HTTP API из `backend/ai`:
 
    ```powershell
-   uv run --frozen python main.py --user-id user-001 --session-key chat-001 "Помоги подобрать концерт в Уфе"
-   uv run --frozen python main.py --user-id user-001 --session-key chat-001 "А что есть бесплатного?"
+   uv run --frozen uvicorn api:app --host 127.0.0.1 --port 8001
    ```
 
-В Langfuse открой трассы и найди `recommend-events` по напечатанному Trace ID.
+В Langfuse открой трассы и найди `recommend-events` по `trace_id` из HTTP-ответа.
 Будут видны узел графа, запрос/ответ, модель, токены, время и ошибки.
 Стоимость GigaChat потребует настройки цены модели в Langfuse, если её нет в каталоге.
 Запросы группируются в Langfuse по внутреннему UUID диалога из PG; передаётся также
@@ -53,14 +59,86 @@ GigaChat (Сбер) → LangGraph → Langfuse.
 Интерактивный чат из `backend/ai`:
 
 ```powershell
-uv run --frozen python chat.py --user-id user-001 --session-key chat-001
+uv run --frozen python main.py --user-id user-001 --session-key chat-001
 ```
 
-Можно запустить просто `uv run --frozen python chat.py`: недостающие ID будут
+Можно запустить просто `uv run --frozen python main.py`: недостающие ID будут
 запрошены в терминале. Пустой ключ диалога создаёт новый UUID. Сообщения вводятся
 по одному; `/exit`, `/quit`, Ctrl+C или конец ввода завершают чат. После ошибки
 отдельного запроса можно продолжить переписку. Для продолжения истории после
 перезапуска используй ту же пару `user-id` и `session-key`.
+Для создания подписок с явным согласием пользователя добавь флаг
+`--subscription-consent`. Без него инструменты чтения и обращения доступны,
+а подписка попросит подтверждение.
+
+## Docker Compose
+
+Агент можно запускать в контейнере без локальной установки Python и uv.
+Создай `backend/ai/.env` по `.env.example` и заполни ключи GigaChat и Langfuse.
+Затем из корня репозитория:
+
+```powershell
+docker compose up -d --build --wait agent
+docker compose logs -f agent
+```
+
+Сервис `agent` также входит в обычный `docker compose up -d --build`.
+Он ждёт готовности PostgreSQL и успешного завершения миграций. API доступен на
+`http://localhost:8001`, healthcheck — на `/health`.
+Внешний порт задаётся через `AGENT_HTTP_PORT` в корневом `.env`.
+
+Для доступа через общий Gateway запусти из корня:
+
+```powershell
+docker compose --profile gateway up -d --build --wait
+```
+
+Чат доступен на `POST http://localhost:8080/ai/api/chat`, инструменты — на
+`GET http://localhost:8080/ai/api/tools`, проверка процесса — на `/ai/health`.
+Swagger: `http://localhost:8080/ai/docs`, OpenAPI: `/ai/openapi.json`, ReDoc: `/ai/redoc`.
+Traefik удаляет `/ai` перед передачей запроса агенту, а Compose задаёт
+`UVICORN_ROOT_PATH=/ai`, чтобы ссылки документации и сервер OpenAPI содержали префикс.
+Прямые вызовы `/api/chat`, `/api/tools` и `/health` на порту `AGENT_HTTP_PORT`
+также доступны. Документацию контейнера открывай через Gateway; при локальном
+запуске Uvicorn без Compose документация работает на `/docs` без префикса.
+
+Compose передаёт настройки из `backend/ai/.env` и переопределяет `DATABASE_URL`:
+внутри сети используется `postgres:5432` с параметрами `POSTGRES_USER`,
+`POSTGRES_PASSWORD` и `POSTGRES_DB` из корневого `.env`. Локальная строка подключения
+в `backend/ai/.env` остаётся для CLI и HTTP API вне Docker.
+Без заполненных ключей агент не запустится; отсутствие файла `.env` не мешает
+запускать отдельно PostgreSQL, миграции и поиск.
+
+Файлы `.env` и локальные кэши исключены из образа. Каталог `backend/ai/certs`
+копируется в образ, если он существует. Для сертификата указывай относительный путь
+`GIGACHAT_CA_BUNDLE_FILE=certs/russian_trusted_root_ca_pem.crt`; после добавления
+или замены сертификата пересобери агент командой выше.
+
+## Подключение инструментов
+
+| Настройка в `backend/ai/.env` | Локальное значение по умолчанию | Назначение |
+| --- | --- | --- |
+| `SEARCHER_BASE_URL` | `http://127.0.0.1:8000` | Поиск и карточки событий |
+| `PARSER_BASE_URL` | `http://127.0.0.1:5164` | Справочник городов для подписок |
+| `INTERACTION_BASE_URL` | `http://127.0.0.1:5266` | Подписки и обращения |
+| `PARSER_API_KEY` | пусто | Ключ парсера, заголовок `X-Parser-Key` |
+| `INTERACTION_API_KEY` | пусто | Пользовательский ключ Interaction API |
+| `TOOL_HTTP_TIMEOUT_SECONDS` | `10` | Таймаут одного HTTP-запроса, от 0 до 60 секунд (0 исключён) |
+
+В Docker адреса автоматически заменяются на имена сервисов с портом `8080`,
+а ключи берутся из корневого `.env`. Для всех инструментов заполни `PARSER_API_KEY`
+и три разных ключа `INTERACTION_API_KEY`, `INTERACTION_ADMIN_API_KEY`,
+`INTERACTION_DELIVERY_API_KEY` по требованиям соответствующих сервисов. Запуск:
+
+```powershell
+docker compose --profile parser --profile interaction up -d --build --wait agent
+```
+
+Парсер и Interaction API остаются в своих профилях. Без них поиск продолжает
+работать, а недоступный инструмент возвращает модели понятную ошибку.
+Ключи, идентификаторы пользователя и согласие не передаются в схему аргументов модели.
+Ошибки инструментов обрабатываются внутри графа; он может уточнить запрос или
+объяснить пользователю отказ. До шести раундов ограничивают зацикливание.
 
 ## История и скользящее окно
 
@@ -76,44 +154,113 @@ uv run --frozen python chat.py --user-id user-001 --session-key chat-001
 следующего запроса не включаются. Размер истории, загружаемой из PG, также ограничен
 окном; полную переписку для интерфейса можно получать отдельно с пагинацией.
 
-## Подключение к backend для фронта
+## HTTP API для фронтенда
 
-HTTP API и авторизация в этом репозитории пока не реализованы. Готовый сервис
-принимает идентификаторы от вызывающего backend:
+Через Gateway базовый адрес API — `http://localhost:8080/ai`, интерактивная
+документация — `/ai/docs`, OpenAPI — `/ai/openapi.json`, проверка процесса — `GET /ai/health`.
+При локальном запуске без Gateway базовый адрес — `http://localhost:8001`,
+документация — `/docs`, OpenAPI — `/openapi.json`, проверка процесса — `GET /health`.
+Конфигурация, модель и клиент Langfuse создаются один раз при старте и закрываются
+при остановке. Синхронные вызовы БД и модели выполняются в пуле потоков FastAPI.
 
-```python
-from uuid import UUID
-from chat import ChatService
-from storage import ChatStore
-from langfuse.langchain import CallbackHandler
+`POST /api/chat` принимает JSON:
 
-service = ChatService(
-    ChatStore(config.database_url.get_secret_value()),
-    graph,
-    history_turns=config.chat_history_turns,
-    callback_factory=lambda: CallbackHandler(
-        public_key=config.langfuse_public_key.get_secret_value()
-    ),
-)
-reply = service.send_message(
-    user_id=verified_user_id,
-    session_key=payload.session_key,
-    request_id=UUID(payload.request_id),
-    content=payload.content,
-)
+```json
+{
+  "user_id": "user-001",
+  "session_id": "chat-001",
+  "message": "Помоги подобрать концерт в Уфе",
+  "request_id": "23b0914b-a8bf-4df0-829c-cc001f3d1a53"
+}
 ```
 
-`user_id` здесь — строковый ID из проверенной авторизации. Нельзя без проверки
-подставлять ID из тела запроса. `session_key` обозначает отдельный диалог,
-а не сессию входа; его уникальность ограничена пользователем. Поэтому одинаковые
-ключи разных пользователей создают разные внутренние UUID.
+Обязательные поля — `user_id`, `session_id` и `message`. Идентификаторы — непустые
+строки до 200 символов; сообщение должно содержать хотя бы один непробельный символ.
+`request_id` — необязательный UUID: если его не передали, сервер создаст и вернёт его.
+При сетевых повторах фронту следует передавать собственный стабильный UUID.
+Текст сообщения сохраняется без обрезки пробелов.
+
+Для подписки интерфейс после явного подтверждения добавляет
+`"subscription_consent": true` (JSON boolean). По умолчанию согласие отсутствует.
+Сам текст диалога не считается подтверждением. `user_id` для операций записи
+должен быть непрозрачным ASCII ID до 128 символов (`A-Z`, `a-z`, `0-9`, `_`, `.`, `:`, `-`).
+
+Успешный ответ (`200`):
+
+```json
+{
+  "user_id": "user-001",
+  "session_id": "chat-001",
+  "request_id": "23b0914b-a8bf-4df0-829c-cc001f3d1a53",
+  "run_id": "60eab5ad-7dcf-4f76-a28b-5f5c0692fb46",
+  "reply": "На какие даты ищешь концерт?",
+  "trace_id": null,
+  "cached": false
+}
+```
+
+`session_id` в HTTP — внешний ключ диалога с фронта. Внутри он передаётся в
+`ChatService` как `session_key`; UUID записи в PostgreSQL и сессия Langfuse остаются
+внутренними. Одинаковые ключи разных пользователей создают разные диалоги.
+В ответе возвращается тот же внешний `session_id`. `trace_id` содержит ID трассы,
+когда он доступен, иначе `null`.
+
+Текущий API принимает `user_id` из тела запроса и доверяет этому значению;
+авторизация в этом прототипе не реализована.
+
+Пример вызова с фронта:
+
+```javascript
+const requestId = crypto.randomUUID(); // сохрани для повторов этого сообщения
+const response = await fetch("http://localhost:8080/ai/api/chat", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    user_id: userId,
+    session_id: sessionId,
+    message: "Что посмотреть в Уфе?",
+    request_id: requestId,
+  }),
+});
+const data = await response.json();
+if (!response.ok) throw new Error(data.detail?.message ?? "Ошибка запроса");
+console.log(data.reply);
+```
+
+По умолчанию CORS разрешает `localhost` и `127.0.0.1` на портах `3000` и `5173`.
+Для другого адреса фронта задай JSON-массив в `backend/ai/.env` и перезапусти API:
+
+```dotenv
+API_CORS_ORIGINS=["https://events.example"]
+```
+
+Ошибки API:
+
+| HTTP | `detail.code` | Значение |
+| --- | --- | --- |
+| 409 | `session_busy` | В диалоге уже формируется ответ; повтори позже |
+| 409 | `request_conflict` | Этот `request_id` использован с другим текстом |
+| 422 | стандартный `detail` FastAPI | Некорректный JSON или поля запроса |
+| 502 | `generation_failed` | Генерация не удалась; для новой попытки нужен новый `request_id` |
+| 503 | `storage_unavailable` | Хранилище переписки недоступно |
+
+Ошибки сервиса имеют вид `{"detail": {"code": "...", "message": "...", "request_id": "..."}}`.
+Для ошибки генерации также возвращается `run_id`. Внутренний текст ошибки модели
+или БД клиенту не передаётся.
+
+`GET /api/tools` возвращает шесть контрактов с `name`, `description`, JSON Schema
+аргументов (`parameters`) и результата (`returns`), а также `implemented: true`.
+Инструменты вызываются графом во время чата; их контракты, подтверждение подписки
+и идемпотентность обращений описаны в [TOOLS.md](TOOLS.md).
+
+## Повторы и работа с историей
 
 Для каждого нового сообщения фронт генерирует `request_id` (UUID) и сохраняет его
-при сетевых повторах. Успешный повтор возвращает прежний ответ с `cached=True`,
+при сетевых повторах. Успешный повтор возвращает прежний ответ с `cached: true`,
 не вызывает модель и не добавляет строки. Повтор с другим текстом вызывает
 `RequestConflictError`. Неудачный запрос сохраняет статус `failed`; повтор с тем же
 UUID возвращает `ChatRunFailedError`. Чтобы заново запустить генерацию после ошибки,
-нужен новый `request_id`. CLI печатает UUID до вызова и принимает `--request-id`.
+нужен новый `request_id`.
 
 На время генерации отдельное соединение удерживает advisory lock диалога.
 Параллельный запрос в этот диалог получает `SessionBusyError` и может повториться
@@ -126,10 +273,10 @@ transaction pooling с такими блокировками несовмест�
 Чтение для интерфейса также ограничено владельцем:
 
 ```python
-store.sessions(verified_user_id, limit=50)
-store.history(verified_user_id, session_key, limit=50)
-store.history(verified_user_id, session_key, limit=50, before_seq=oldest_seq)
-store.run(verified_user_id, session_key, request_id)
+store.sessions(user_id, limit=50)
+store.history(user_id, session_key, limit=50)
+store.history(user_id, session_key, limit=50, before_seq=oldest_seq)
+store.run(user_id, session_key, request_id)
 ```
 
 Страница истории возвращается в порядке возрастания `seq`; для предыдущей страницы
@@ -152,7 +299,7 @@ in certificate chain` означает, что Python не доверяет се
 GIGACHAT_CA_BUNDLE_FILE=certs/russian_trusted_root_ca_pem.crt
 ```
 
-Затем перезапусти `main.py`. Путь может быть абсолютным; относительный путь считается
+Затем перезапусти HTTP API или CLI. Путь может быть абсолютным; относительный путь считается
 от `backend/ai`, независимо от каталога запуска. Если файл не найден, конфигурация
 сообщит об этом до обращения к API. Проверка TLS остаётся включённой.
 Если соединение проходит через корпоративный прокси или антивирус с подменой
@@ -166,7 +313,8 @@ GIGACHAT_CA_BUNDLE_FILE=certs/russian_trusted_root_ca_pem.crt
 
 ## Проверки
 
-Проверка окна, конфигурации, графа и экспорта без внешних API:
+Проверка HTTP API, CORS, контрактов инструментов, окна, конфигурации, графа и экспорта
+без внешних API:
 
 ```powershell
 uv run --frozen python -m unittest discover -s tests -v
@@ -176,7 +324,7 @@ uv run --frozen python -m unittest discover -s tests -v
 в окружении или `.env` и выполни ту же команду. Тесты создают случайную схему,
 применяют миграцию и удаляют только эту схему после завершения. Без этой переменной
 проверки PG пропускаются. Проверяются сохранность полной истории, размер окна,
-изоляция пользователей, повторные запросы, пагинация, блокировки, сбой процесса
+изоляция пользователей, HTTP-запросы с историей и повторами, пагинация, блокировки, сбой процесса
 и атомарность сохранения ответа.
 
 Для self-hosted Langfuse SDK 5 требует сервер версии 4.59.0+.

@@ -78,6 +78,7 @@ class EventSearchService:
     def get_venue_schedule(self, query: ScheduleQuery) -> SchedulePage:
         conditions = [
             Event.status == "Published",
+            Event.manually_suppressed.is_(False),
             normalized(Event.venue) == normalize(query.venue),
             *period_conditions(query.date_from, query.date_to),
         ]
@@ -111,9 +112,17 @@ class EventSearchService:
         if reference is None:
             raise EventNotFoundError(str(event_id))
         score, candidate = similarity(reference)
+        conditions = [Event.id != event_id, candidate, score >= query.min_score]
+        if query.public_only:
+            conditions.extend(
+                (Event.status == "Published", Event.manually_suppressed.is_(False))
+            )
+        if query.city:
+            conditions.append(normalized(Event.city) == normalize(query.city))
+        conditions.extend(period_conditions(query.date_from, query.date_to))
         statement = (
             select(Event, score.label("score"))
-            .where(Event.id != event_id, candidate, score >= query.min_score)
+            .where(*conditions)
             .order_by(
                 score.desc(),
                 Event.start_date.asc().nulls_last(),
@@ -142,7 +151,7 @@ class EventSearchService:
         rows = self.session.execute(
             statement.options(selectinload(Event.sources))
             .limit(query.page_size)
-            .offset((query.page - 1) * query.page_size)
+            .offset(query.start_offset)
         ).all()
         return total, rows
 
@@ -158,9 +167,9 @@ class EventSearchService:
         pages = (total + query.page_size - 1) // query.page_size
         return dict(
             total=total,
-            page=query.page,
+            page=query.start_offset // query.page_size + 1,
             page_size=query.page_size,
             pages=pages,
-            has_next=query.page < pages,
-            has_previous=query.page > 1 and total > 0,
+            has_next=query.start_offset + query.page_size < total,
+            has_previous=query.start_offset > 0 and total > 0,
         )
