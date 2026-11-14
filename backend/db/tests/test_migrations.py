@@ -19,7 +19,7 @@ from sqlalchemy.pool import NullPool
 DB_DIR = Path(__file__).resolve().parents[1]
 INI = DB_DIR / "alembic.ini"
 LEGACY = DB_DIR / "legacy" / "001_chat_history.sql"
-HEAD_REVISION = "0004_event_search"
+HEAD_REVISION = "0006_interaction_service"
 
 
 class OfflineMigrationTest(unittest.TestCase):
@@ -49,9 +49,11 @@ class OfflineMigrationTest(unittest.TestCase):
             "parser_event_sources",
             "parser_collection_runs",
             "parser_event_audit",
+            "parser_cities", "parser_venues", "parser_city_aliases", "parser_venue_aliases",
+            "interaction_recipients", "interaction_subscriptions", "interaction_notifications",
+            "interaction_notification_events", "interaction_feedback", "interaction_feedback_reviews",
             "alembic_version",
         ):
-        for name in ("chat_sessions", "chat_runs", "chat_messages", "parser_raw_documents", "parser_events", "parser_event_sources", "parser_collection_runs", "parser_event_audit", "parser_cities", "parser_venues", "parser_city_aliases", "parser_venue_aliases", "alembic_version"):
             self.assertIn(f"CREATE TABLE {name}", result.stdout)
         self.assertIn("CREATE EXTENSION IF NOT EXISTS pg_trgm", result.stdout)
         self.assertIn("CREATE INDEX parser_events_search_idx", result.stdout)
@@ -156,9 +158,8 @@ class MigrationTest(unittest.TestCase):
         self.assertEqual(self.current(), HEAD_REVISION)
         self.migrate()
         self.assertEqual(self.current(), HEAD_REVISION)
-        self.assertEqual(self.current(), "0005_parser_references")
         self.migrate()
-        self.assertEqual(self.current(), "0005_parser_references")
+        self.assertEqual(self.current(), HEAD_REVISION)
 
     def test_downgrade_and_upgrade(self):
         self.migrate()
@@ -174,22 +175,20 @@ class MigrationTest(unittest.TestCase):
                 "parser_event_sources",
                 "parser_collection_runs",
                 "parser_event_audit",
+                "parser_cities", "parser_venues", "parser_city_aliases", "parser_venue_aliases",
+                "interaction_recipients", "interaction_subscriptions", "interaction_notifications",
+                "interaction_notification_events", "interaction_feedback", "interaction_feedback_reviews",
             ):
                 self.assertIsNone(
                     connection.execute("SELECT to_regclass(%s)", (name,)).fetchone()[0]
                 )
         self.migrate()
         self.assertEqual(self.current(), HEAD_REVISION)
-            for name in ("chat_sessions", "chat_runs", "chat_messages", "parser_raw_documents", "parser_events", "parser_event_sources", "parser_collection_runs", "parser_event_audit", "parser_cities", "parser_venues", "parser_city_aliases", "parser_venue_aliases"):
-                self.assertIsNone(connection.execute("SELECT to_regclass(%s)", (name,)).fetchone()[0])
-        self.migrate()
-        self.assertEqual(self.current(), "0005_parser_references")
 
     def test_legacy_adoption_preserves_messages_and_ids(self):
         self.legacy_database()
         self.migrate()
         self.assertEqual(self.current(), HEAD_REVISION)
-        self.assertEqual(self.current(), "0005_parser_references")
         self.assert_legacy_data_intact()
         self.migrate()
         self.assert_legacy_data_intact()
@@ -244,7 +243,6 @@ class MigrationTest(unittest.TestCase):
                     process.kill()
                     process.communicate()
         self.assertEqual(self.current(), HEAD_REVISION)
-        self.assertEqual(self.current(), "0005_parser_references")
 
     def test_raw_documents_preserve_history_and_validate_hash(self):
         self.migrate()
@@ -328,7 +326,6 @@ class MigrationTest(unittest.TestCase):
             )
         self.migrate()
         self.assertEqual(self.current(), HEAD_REVISION)
-        self.assertEqual(self.current(), "0005_parser_references")
 
     def test_ingestion_upgrade_preserves_existing_page_documents(self):
         config = Config(str(INI))
@@ -361,7 +358,7 @@ class MigrationTest(unittest.TestCase):
                 (document_id, digest))
         with self.assertRaisesRegex(Exception, "Cannot downgrade ingestion"):
             self.migrate(downgrade=True, revision="0003_parser_pipeline")
-        self.assertEqual(self.current(), "0005_parser_references")
+        self.assertEqual(self.current(), HEAD_REVISION)
         with psycopg.connect(self.dsn) as connection:
             self.assertEqual(connection.execute("SELECT source_type,http_status FROM parser_raw_documents WHERE id=%s", (document_id,)).fetchone(), ("Import", None))
         with self.assertRaises(psycopg.errors.CheckViolation):

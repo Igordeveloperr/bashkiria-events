@@ -221,3 +221,16 @@ parser_venues, parser_venue_aliases и добавляет nullable city_id/venue
 Правила и API: [README парсера](../parser/README.md).
 Откат 0005 удаляет справочники и связи, сохраняя текстовые поля событий,
 происхождение и аудит. Пользовательские записи справочников при откате теряются.
+
+## Подписки, уведомления и обратная связь
+
+`0006_interaction_service` объединяет вершины `0005_parser_references`
+и `0004_event_search`: после неё снова используется единый `alembic upgrade head`.
+Новые таблицы: interaction_recipients, interaction_subscriptions,
+interaction_notifications, interaction_notification_events, interaction_feedback,
+interaction_feedback_reviews. Существующие события, исходники и индексы поиска
+сохраняются. Откат 0006 удаляет пользовательские данные interactionService;
+нужные данные следует предварительно сохранить.
+
+Приложение использует async EF Core, не запускает EnsureCreated и EF migrations.
+Контракты и сроки хранения: [Interaction README](../interactionService/README.md).
