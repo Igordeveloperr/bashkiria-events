@@ -62,6 +62,32 @@ services:
     networks:
       - backend
 
+  searcher:
+    build:
+      context: ./backend/searcher
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: ${POSTGRES_USER:-bashkiria}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-bashkiria}
+      PGDATABASE: ${POSTGRES_DB:-bashkiria}
+    ports:
+      - "127.0.0.1:${SEARCHER_HTTP_PORT:-8000}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - backend
+
 networks:
   backend:
     driver: bridge

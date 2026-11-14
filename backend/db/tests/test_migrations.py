@@ -2,15 +2,15 @@
 
 import hashlib
 import os
-from pathlib import Path
 import subprocess
 import sys
 import unittest
+from pathlib import Path
 from uuid import uuid4
 
+import psycopg
 from alembic import command
 from alembic.config import Config
-import psycopg
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
 from sqlalchemy import create_engine
@@ -19,37 +19,70 @@ from sqlalchemy.pool import NullPool
 DB_DIR = Path(__file__).resolve().parents[1]
 INI = DB_DIR / "alembic.ini"
 LEGACY = DB_DIR / "legacy" / "001_chat_history.sql"
+HEAD_REVISION = "0004_event_search"
 
 
 class OfflineMigrationTest(unittest.TestCase):
     def test_offline_upgrade_requires_no_database_or_model_credentials(self):
         result = subprocess.run(
-            [sys.executable, "-m", "alembic", "-c", str(INI), "upgrade", "head", "--sql"],
-            capture_output=True, text=True, timeout=20,
+            [
+                sys.executable,
+                "-m",
+                "alembic",
+                "-c",
+                str(INI),
+                "upgrade",
+                "head",
+                "--sql",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+        for name in (
+            "chat_sessions",
+            "chat_runs",
+            "chat_messages",
+            "parser_raw_documents",
+            "parser_events",
+            "parser_event_sources",
+            "parser_collection_runs",
+            "parser_event_audit",
+            "alembic_version",
+        ):
         for name in ("chat_sessions", "chat_runs", "chat_messages", "parser_raw_documents", "parser_events", "parser_event_sources", "parser_collection_runs", "parser_event_audit", "parser_cities", "parser_venues", "parser_city_aliases", "parser_venue_aliases", "alembic_version"):
             self.assertIn(f"CREATE TABLE {name}", result.stdout)
+        self.assertIn("CREATE EXTENSION IF NOT EXISTS pg_trgm", result.stdout)
+        self.assertIn("CREATE INDEX parser_events_search_idx", result.stdout)
 
 
-@unittest.skipUnless(os.getenv("TEST_DATABASE_URL"), "Set TEST_DATABASE_URL for PostgreSQL tests")
+@unittest.skipUnless(
+    os.getenv("TEST_DATABASE_URL"), "Set TEST_DATABASE_URL for PostgreSQL tests"
+)
 class MigrationTest(unittest.TestCase):
     def setUp(self):
         self.base_url = os.environ["TEST_DATABASE_URL"]
         self.schema = "migration_test_" + uuid4().hex
         with psycopg.connect(self.base_url, autocommit=True) as connection:
-            connection.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(self.schema)))
+            connection.execute(
+                sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(self.schema))
+            )
         self.addCleanup(self.drop_schema)
         self.dsn = make_conninfo(self.base_url, options=f"-csearch_path={self.schema}")
 
     def drop_schema(self):
         with psycopg.connect(self.base_url, autocommit=True) as connection:
-            connection.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(self.schema)))
+            connection.execute(
+                sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(self.schema))
+            )
 
     def migrate(self, *, downgrade=False, revision=None):
         config = Config(str(INI))
         engine = create_engine(
-            "postgresql+psycopg://", creator=lambda: psycopg.connect(self.dsn), poolclass=NullPool
+            "postgresql+psycopg://",
+            creator=lambda: psycopg.connect(self.dsn),
+            poolclass=NullPool,
         )
         try:
             with engine.begin() as connection:
@@ -63,9 +96,13 @@ class MigrationTest(unittest.TestCase):
 
     def current(self):
         with psycopg.connect(self.dsn) as connection:
-            if not connection.execute("SELECT to_regclass('alembic_version')").fetchone()[0]:
+            if not connection.execute(
+                "SELECT to_regclass('alembic_version')"
+            ).fetchone()[0]:
                 return None
-            result = connection.execute("SELECT version_num FROM alembic_version").fetchone()
+            result = connection.execute(
+                "SELECT version_num FROM alembic_version"
+            ).fetchone()
             return result[0] if result else None
 
     def legacy_database(self, *, checksum=None, marker=True):
@@ -75,18 +112,17 @@ class MigrationTest(unittest.TestCase):
         with psycopg.connect(self.dsn) as connection:
             connection.execute(source)
             if marker:
-                connection.execute(
-                    """CREATE TABLE ai_schema_migrations (
+                connection.execute("""CREATE TABLE ai_schema_migrations (
                         name text PRIMARY KEY, checksum text NOT NULL,
-                        applied_at timestamptz NOT NULL DEFAULT now())"""
-                )
+                        applied_at timestamptz NOT NULL DEFAULT now())""")
                 connection.execute(
                     "INSERT INTO ai_schema_migrations (name, checksum) VALUES (%s, %s)",
                     (LEGACY.name, checksum),
                 )
             connection.execute(
                 """INSERT INTO chat_sessions (id, user_id, session_key, next_seq)
-                   VALUES (%s, 'legacy-user', 'legacy-chat', 3)""", (self.session_id,),
+                   VALUES (%s, 'legacy-user', 'legacy-chat', 3)""",
+                (self.session_id,),
             )
             run_id = uuid4()
             connection.execute(
@@ -94,7 +130,10 @@ class MigrationTest(unittest.TestCase):
                    VALUES (%s, %s, %s, 'completed', now())""",
                 (run_id, self.session_id, uuid4()),
             )
-            for seq, role, content in ((1, "user", "original question"), (2, "assistant", "original answer")):
+            for seq, role, content in (
+                (1, "user", "original question"),
+                (2, "assistant", "original answer"),
+            ):
                 connection.execute(
                     """INSERT INTO chat_messages (id, session_id, run_id, seq, role, content)
                        VALUES (%s, %s, %s, %s, %s, %s)""",
@@ -103,13 +142,20 @@ class MigrationTest(unittest.TestCase):
 
     def assert_legacy_data_intact(self):
         with psycopg.connect(self.dsn) as connection:
-            result = connection.execute("SELECT content FROM chat_messages ORDER BY seq").fetchall()
+            result = connection.execute(
+                "SELECT content FROM chat_messages ORDER BY seq"
+            ).fetchall()
             self.assertEqual(result, [("original question",), ("original answer",)])
-            result = connection.execute("SELECT id, next_seq FROM chat_sessions").fetchone()
+            result = connection.execute(
+                "SELECT id, next_seq FROM chat_sessions"
+            ).fetchone()
             self.assertEqual(result, (self.session_id, 3))
 
     def test_fresh_upgrade_and_repeat(self):
         self.migrate()
+        self.assertEqual(self.current(), HEAD_REVISION)
+        self.migrate()
+        self.assertEqual(self.current(), HEAD_REVISION)
         self.assertEqual(self.current(), "0005_parser_references")
         self.migrate()
         self.assertEqual(self.current(), "0005_parser_references")
@@ -119,6 +165,21 @@ class MigrationTest(unittest.TestCase):
         self.migrate(downgrade=True)
         self.assertIsNone(self.current())
         with psycopg.connect(self.dsn) as connection:
+            for name in (
+                "chat_sessions",
+                "chat_runs",
+                "chat_messages",
+                "parser_raw_documents",
+                "parser_events",
+                "parser_event_sources",
+                "parser_collection_runs",
+                "parser_event_audit",
+            ):
+                self.assertIsNone(
+                    connection.execute("SELECT to_regclass(%s)", (name,)).fetchone()[0]
+                )
+        self.migrate()
+        self.assertEqual(self.current(), HEAD_REVISION)
             for name in ("chat_sessions", "chat_runs", "chat_messages", "parser_raw_documents", "parser_events", "parser_event_sources", "parser_collection_runs", "parser_event_audit", "parser_cities", "parser_venues", "parser_city_aliases", "parser_venue_aliases"):
                 self.assertIsNone(connection.execute("SELECT to_regclass(%s)", (name,)).fetchone()[0])
         self.migrate()
@@ -127,6 +188,7 @@ class MigrationTest(unittest.TestCase):
     def test_legacy_adoption_preserves_messages_and_ids(self):
         self.legacy_database()
         self.migrate()
+        self.assertEqual(self.current(), HEAD_REVISION)
         self.assertEqual(self.current(), "0005_parser_references")
         self.assert_legacy_data_intact()
         self.migrate()
@@ -156,9 +218,22 @@ class MigrationTest(unittest.TestCase):
         self.assert_legacy_data_intact()
 
     def test_two_migration_processes_are_serialized(self):
-        environment = dict(os.environ, DATABASE_URL=self.base_url, PGOPTIONS=f"-csearch_path={self.schema}")
+        environment = dict(
+            os.environ,
+            DATABASE_URL=self.base_url,
+            PGOPTIONS=f"-csearch_path={self.schema}",
+        )
         args = [sys.executable, "-m", "alembic", "-c", str(INI), "upgrade", "head"]
-        processes = [subprocess.Popen(args, env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for _ in range(2)]
+        processes = [
+            subprocess.Popen(
+                args,
+                env=environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            for _ in range(2)
+        ]
         try:
             for process in processes:
                 output, error = process.communicate(timeout=30)
@@ -168,6 +243,7 @@ class MigrationTest(unittest.TestCase):
                 if process.poll() is None:
                     process.kill()
                     process.communicate()
+        self.assertEqual(self.current(), HEAD_REVISION)
         self.assertEqual(self.current(), "0005_parser_references")
 
     def test_raw_documents_preserve_history_and_validate_hash(self):
@@ -200,8 +276,58 @@ class MigrationTest(unittest.TestCase):
         self.assertEqual(self.current(), "0001_chat_history")
         self.assert_legacy_data_intact()
         with psycopg.connect(self.dsn) as connection:
-            self.assertIsNone(connection.execute("SELECT to_regclass('parser_raw_documents')").fetchone()[0])
+            self.assertIsNone(
+                connection.execute(
+                    "SELECT to_regclass('parser_raw_documents')"
+                ).fetchone()[0]
+            )
         self.migrate()
+        self.assertEqual(self.current(), HEAD_REVISION)
+
+    def test_search_indexes_and_downgrade_preserve_events(self):
+        self.migrate()
+        event_id = uuid4()
+        with psycopg.connect(self.dsn) as connection:
+            connection.execute(
+                """INSERT INTO parser_events
+                   (id, dedup_key, title, normalized_title, category, city, venue, address,
+                    description, status, source_status, data_hash, tags, confidence, issues_json,
+                    source_priority, verified_at, created_at, updated_at, version, manually_suppressed)
+                   VALUES (%s, 'fixture', 'Fixture', 'fixture', 'Other', '', '', '', '', 'Draft',
+                           'Unknown', 'fixture', '{}', 0.5, '[]', 1, now(), now(), now(), 1, false)""",
+                (event_id,),
+            )
+            indexes = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT indexname FROM pg_indexes WHERE schemaname = %s",
+                    (self.schema,),
+                )
+            }
+            self.assertTrue(
+                {
+                    "parser_events_search_idx",
+                    "parser_events_title_trgm_idx",
+                    "parser_events_venue_date_idx",
+                    "parser_events_city_category_idx",
+                    "parser_event_sources_source_idx",
+                }
+                <= indexes
+            )
+        self.migrate(downgrade=True, revision="0003_parser_pipeline")
+        self.assertEqual(self.current(), "0003_parser_pipeline")
+        with psycopg.connect(self.dsn) as connection:
+            self.assertEqual(
+                connection.execute("SELECT id, title FROM parser_events").fetchall(),
+                [(event_id, "Fixture")],
+            )
+            self.assertIsNone(
+                connection.execute(
+                    "SELECT to_regclass('parser_events_search_idx')"
+                ).fetchone()[0]
+            )
+        self.migrate()
+        self.assertEqual(self.current(), HEAD_REVISION)
         self.assertEqual(self.current(), "0005_parser_references")
 
     def test_ingestion_upgrade_preserves_existing_page_documents(self):

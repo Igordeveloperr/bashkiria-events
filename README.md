@@ -18,7 +18,8 @@ docker compose run --rm --build migrate
 профилем Compose. Настройки и требования к ключу API описаны в его README.
 
 Все сервисы проекта описываются в корневом [compose.yaml](compose.yaml).
-Сейчас доступны PostgreSQL и одноразовый сервис миграций Alembic.
+Доступны PostgreSQL, одноразовый сервис миграций Alembic, поисковый HTTP-сервис
+и парсер в отдельном профиле.
 
 ## Запуск
 
@@ -31,7 +32,7 @@ docker compose logs migrate
 ```
 
 PostgreSQL проходит healthcheck, затем `migrate` выполняет `alembic upgrade head`
-и завершается с кодом 0. Повторный запуск применяет только новые ревизии.
+и завершается с кодом 0, после чего запускается поиск. Повторный запуск применяет только новые ревизии.
 При ошибке `docker compose wait migrate` возвращает ненулевой код.
 
 По умолчанию база, пользователь и пароль — `bashkiria`, локальный порт — `5432`.
@@ -50,6 +51,11 @@ POSTGRES_PORT=55432
 `DATABASE_URL=postgresql://bashkiria:bashkiria@localhost:55432/bashkiria`
 и повтори `docker compose up -d`. Внутри Docker остаётся адрес `postgres:5432`;
 пересоздание контейнера с другим внешним портом сохраняет существующий том БД.
+
+Поисковый API доступен на `http://localhost:8000`, Swagger — на
+`http://localhost:8000/docs`. Поддерживаются полные события с пагинацией,
+фильтры, расписание площадки и похожие события по UUID. Порт задаётся
+через `SEARCHER_HTTP_PORT`. Контракты и примеры — в [Search README](backend/searcher/README.md).
 
 AI-сервис пока запускается через CLI. В `backend/ai/.env` укажи ключи модели,
 Langfuse и локальную строку подключения (порт должен совпадать с `POSTGRES_PORT`):
@@ -77,7 +83,7 @@ docker compose run --rm migrate
 docker compose run --rm migrate alembic current
 ```
 
-При добавлении HTTP backend в этот же Compose укажи его зависимость:
+Для новых сервисов в этом же Compose укажи зависимость, как у поиска:
 
 ```yaml
 depends_on:
@@ -87,5 +93,5 @@ depends_on:
     condition: service_completed_successfully
 ```
 
-Так backend начнёт работу после успешной миграции. Frontend и HTTP backend будут
-добавлены в этот Compose по мере появления их исполняемых сервисов.
+Так backend начнёт работу после успешной миграции. Frontend и AI HTTP backend
+будут добавлены в этот Compose по мере появления их исполняемых сервисов.
