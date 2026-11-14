@@ -25,7 +25,7 @@ public sealed class SourceCollectorResilienceTests
         });
         var handler = new OutageHandler();
         using var http = new HttpClient(handler);
-        var registry = new SourceRegistry(options, new GkzParser(), new StructuredEventParser());
+        var registry = new SourceRegistry(options, [new GkzSourceParser(new GkzParser()), new StructuredEventParser()]);
         var collector = new SourceCollector(registry, new SourcePageClient(http, new Documents()), new Events(),
             new CandidateNormalizer(TimeProvider.System), options, NullLogger<SourceCollector>.Instance);
 
@@ -57,7 +57,7 @@ public sealed class SourceCollectorResilienceTests
 
     private sealed class Events : IEventStore
     {
-        public Task<EventSaveResult> SaveAsync(SourceOptions source, EventCandidate candidate, RawDocument document, CancellationToken token) =>
+        public Task<EventSaveResult> SaveAsync(EventWriteContext source, EventCandidate candidate, RawDocument document, CancellationToken token) =>
             throw new InvalidOperationException("Unavailable cards must not produce events.");
     }
 }

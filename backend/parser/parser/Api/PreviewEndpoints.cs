@@ -31,7 +31,7 @@ public static class PreviewEndpoints
             if (string.IsNullOrWhiteSpace(request.Html) || request.PageUrl is null || !request.PageUrl.IsAbsoluteUri ||
                 !Common.SourceUrls.IsAllowed(request.PageUrl, GkzClient.ListingUrl) ||
                 !request.PageUrl.AbsolutePath.StartsWith("/events/", StringComparison.Ordinal))
-                return Results.BadRequest(new { message = "Укажите HTML и HTTPS-адрес карточки ГКЗ." });
+                return ApiErrors.Problem(400, "Укажите HTML и HTTPS-адрес карточки ГКЗ.");
             return Results.Ok(parser.Parse(request.Html, request.PageUrl));
         });
     }

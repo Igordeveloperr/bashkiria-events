@@ -8,6 +8,7 @@ using Bashkiria.Events.Parser.Processing;
 using Bashkiria.Events.Parser.Storage;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Bashkiria.Events.Parser.References;
 
 namespace Parser.Tests;
 
@@ -28,8 +29,9 @@ public sealed class PostgresPersistenceTests : IAsyncLifetime
     private readonly TimeProvider _clock = TimeProvider.System;
     private PooledDbContextFactory<ParserDbContext> Factory => new(new DbContextOptionsBuilder<ParserDbContext>()
         .UseNpgsql(Environment.GetEnvironmentVariable("PARSER_TEST_CONNECTION_STRING")).Options);
-    private SourceOptions Source => new() { Id = _sourceId, Priority = 100 };
-    private EfEventStore Store => new(Factory, new CandidateNormalizer(_clock));
+    private EventWriteContext Source => new(_sourceId, 100);
+    private EfEventStore Store => new(Factory, new CandidateNormalizer(_clock), new VenueResolver(),
+        new ReferenceEventNormalizer(Factory, new(_clock), new VenueResolver(), _clock));
 
     [PostgresFact]
     public async Task RawDocumentUsesExistingSchemaAndRetryIsIdempotent()
@@ -66,7 +68,7 @@ public sealed class PostgresPersistenceTests : IAsyncLifetime
         var candidate = Candidate();
         var first = await SaveAsync(candidate);
         var document = await DocumentAsync(_sourceId + "-second");
-        var second = await Store.SaveAsync(new SourceOptions { Id = _sourceId + "-second", Priority = 50 },
+        var second = await Store.SaveAsync(new EventWriteContext(_sourceId + "-second", 50),
             candidate with { SourceUrl = new Uri("https://example.org/events/second/"), Description = "Lower priority" }, document, CancellationToken.None);
         _events.Add(second.EventId);
         Assert.Equal(first.EventId, second.EventId);
@@ -81,7 +83,7 @@ public sealed class PostgresPersistenceTests : IAsyncLifetime
         var saved = await SaveAsync(Candidate());
         await using var db = await Factory.CreateDbContextAsync();
         var item = await db.Events.AsNoTracking().SingleAsync(item => item.Id == saved.EventId);
-        var review = new EventReviewService(Factory, new CandidateNormalizer(_clock), _clock);
+        var review = new EventReviewService(Factory, new CandidateNormalizer(_clock), _clock, new VenueResolver());
         await review.ReviewAsync(item.Id, new(item.Version, PublicationStatus.Cancelled, "Fixture moderator withdrawal"), CancellationToken.None);
         await Assert.ThrowsAsync<DbUpdateConcurrencyException>(() => review.ReviewAsync(item.Id,
             new(item.Version, PublicationStatus.Published, "Stale version"), CancellationToken.None));
@@ -129,7 +131,7 @@ public sealed class PostgresPersistenceTests : IAsyncLifetime
         var saved = await SaveAsync(Candidate());
         await using var db = await Factory.CreateDbContextAsync();
         var item = await db.Events.AsNoTracking().SingleAsync(item => item.Id == saved.EventId);
-        var review = new EventReviewService(Factory, new CandidateNormalizer(_clock), _clock);
+        var review = new EventReviewService(Factory, new CandidateNormalizer(_clock), _clock, new VenueResolver());
         await review.ReviewAsync(item.Id, new(item.Version, PublicationStatus.Published,
             "Fixture confirmed new start time", StartTime: new TimeOnly(19, 0)), CancellationToken.None);
 
@@ -186,8 +188,8 @@ public sealed class PostgresPersistenceTests : IAsyncLifetime
         StartDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(30)),
         StartTime = new TimeOnly(17, 0),
         City = "Уфа",
-        Venue = "Fixture venue",
-        Address = "Fixture address",
+        Venue = "ГКЗ «Башкортостан»",
+        Address = "ул. Ленина, 50",
         Description = "Fixture description",
         PriceMin = 100,
         PriceMax = 100,

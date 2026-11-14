@@ -19,6 +19,10 @@ public sealed record EventCandidate
     public TimeOnly? EndTime { get; init; }
 
     public string? City { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? CityId { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? VenueId { get; init; }
     public string? Venue { get; init; }
     public string? Address { get; init; }
     public string? Description { get; init; }

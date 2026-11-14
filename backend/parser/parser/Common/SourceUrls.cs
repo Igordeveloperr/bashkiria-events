@@ -11,7 +11,8 @@ public static class SourceUrls
 
     public static Uri Canonical(Uri uri)
     {
-        var builder = new UriBuilder(uri) { Fragment = string.Empty, Port = -1 };
+        if (uri.Scheme == "urn") return uri;
+        var builder = new UriBuilder(uri) { Fragment = string.Empty, Port = uri.IsDefaultPort ? -1 : uri.Port };
         // Event identities must not depend on marketing tags; other query parameters can be meaningful.
         var query = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(uri.Query)
             .Where(pair => !pair.Key.StartsWith("utm_", StringComparison.OrdinalIgnoreCase))

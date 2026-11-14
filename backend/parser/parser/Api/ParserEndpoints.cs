@@ -9,6 +9,7 @@ using Bashkiria.Events.Parser.Jobs;
 using Bashkiria.Events.Parser.Models;
 using Bashkiria.Events.Parser.Processing;
 using Bashkiria.Events.Parser.Storage;
+using Bashkiria.Events.Parser.Ingestion;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
@@ -20,6 +21,8 @@ public static class ParserEndpoints
     {
         var api = app.MapGroup("/api/v1/parser").AddEndpointFilter<ParserApiKeyFilter>()
             .RequireRateLimiting("parser-api").WithTags("Parser");
+        api.MapIngestionEndpoints();
+        api.MapReferenceEndpoints();
 
         api.MapGet("/sources", (SourceRegistry sources) => Results.Ok(sources.Sources.Select(source => new
         { source.Id, source.Kind, source.Enabled, source.ListingUrl, source.Priority })));
@@ -29,7 +32,7 @@ public static class ParserEndpoints
         {
             var source = sources.Get(sourceId);
             var limit = maxPages ?? options.Value.MaxPagesPerRun;
-            if (limit < 1 || limit > options.Value.MaxPagesPerRun) return Results.BadRequest(new { message = "Некорректный лимит карточек." });
+            if (limit < 1 || limit > options.Value.MaxPagesPerRun) return ApiErrors.Problem(400, "Некорректный лимит карточек.");
             var run = await runs.EnqueueAsync(source.Id, limit, null, token);
             return Results.Accepted($"/api/v1/parser/runs/{run.Id}", RunDto(run));
         }).Produces<CollectionRunResponse>(StatusCodes.Status202Accepted);
@@ -45,21 +48,23 @@ public static class ParserEndpoints
         {
             await using var db = await contexts.CreateDbContextAsync(token);
             var run = await db.CollectionRuns.AsNoTracking().SingleOrDefaultAsync(run => run.Id == id, token);
-            return run is null ? Results.NotFound() : Results.Ok(RunDto(run));
+            return run is null ? ApiErrors.Problem(404) : Results.Ok(RunDto(run));
         }).Produces<CollectionRunResponse>();
 
         api.MapDelete("/runs/{id:guid}", async (Guid id, CollectionRunStore runs, CancellationToken token) =>
-            await runs.CancelAsync(id, token) ? Results.NoContent() : Results.Conflict(new { message = "Запуск уже завершён или не существует." }));
+            await runs.CancelAsync(id, token) ? Results.NoContent() : ApiErrors.Problem(409, "Запуск уже завершён или не существует."));
 
         api.MapGet("/events", async (IDbContextFactory<ParserDbContext> contexts, int? page, int? pageSize,
-            PublicationStatus? status, string? city, CancellationToken token) =>
+            PublicationStatus? status, string? city, Guid? cityId, Guid? venueId, CancellationToken token) =>
         {
             var number = page ?? 1; var size = pageSize ?? 30;
             if (number < 1 || number > 100000 || size is < 1 or > 100 || status.HasValue && !Enum.IsDefined(status.Value))
-                return Results.BadRequest(new { message = "Некорректные параметры списка." });
+                return ApiErrors.Problem(400, "Некорректные параметры списка.");
             await using var db = await contexts.CreateDbContextAsync(token);
             var query = db.Events.AsNoTracking().Where(item => !status.HasValue || item.Status == status)
-                .Where(item => city == null || item.City == city);
+                .Where(item => city == null || item.City == city)
+                .Where(item => !cityId.HasValue || item.CityId == cityId)
+                .Where(item => !venueId.HasValue || item.VenueId == venueId);
             var count = await query.CountAsync(token);
             var items = await query.Include(item => item.Sources).OrderBy(item => item.StartDate).ThenBy(item => item.Id)
                 .Skip((number - 1) * size).Take(size).ToListAsync(token);
@@ -70,12 +75,13 @@ public static class ParserEndpoints
             IOptions<ParserOptions> options, TimeProvider clock, int? page, int? pageSize, CancellationToken token) =>
         {
             var number = page ?? 1; var size = pageSize ?? 30;
-            if (number < 1 || number > 100000 || size is < 1 or > 100) return Results.BadRequest();
+            if (number < 1 || number > 100000 || size is < 1 or > 100) return ApiErrors.Problem(400);
             await using var db = await contexts.CreateDbContextAsync(token);
             var freshSince = clock.GetUtcNow().AddHours(-options.Value.FreshnessHours);
             var now = clock.GetUtcNow();
             var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(clock.GetUtcNow(), CandidateNormalizer.Zone).DateTime);
             var query = db.Events.AsNoTracking().Where(item => item.Status == PublicationStatus.Published &&
+                item.CityId != null && item.VenueId != null &&
                 item.SourceStatus != SourceEventStatus.Cancelled && item.SourceStatus != SourceEventStatus.Postponed &&
                 item.VerifiedAt >= freshSince && (item.EndDate ?? item.StartDate) >= today &&
                 (item.DateEnd >= now || item.DateEnd == null && (item.EndDate > item.StartDate || item.DateStart >= now)));
@@ -89,7 +95,7 @@ public static class ParserEndpoints
         {
             await using var db = await contexts.CreateDbContextAsync(token);
             var item = await db.Events.AsNoTracking().Include(item => item.Sources).SingleOrDefaultAsync(item => item.Id == id, token);
-            return item is null ? Results.NotFound() : Results.Ok(EventDto(item));
+            return item is null ? ApiErrors.Problem(404) : Results.Ok(EventDto(item));
         }).Produces<EventResponse>();
 
         api.MapPatch("/events/{id:guid}/review", async (Guid id, ReviewEventRequest request, EventReviewService review, CancellationToken token) =>
@@ -110,21 +116,22 @@ public static class ParserEndpoints
         {
             await using var db = await contexts.CreateDbContextAsync(token);
             var document = await db.RawDocuments.AsNoTracking().SingleOrDefaultAsync(item => item.Id == id, token);
-            return document is null ? Results.NotFound() : Results.Ok(document);
+            return document is null ? ApiErrors.Problem(404) : Results.Ok(document);
         });
 
         api.MapPost("/raw-documents/{id:guid}/reparse", async (Guid id, IDbContextFactory<ParserDbContext> contexts,
-            SourceRegistry sources, IEventStore events, CancellationToken token) =>
+            SourceRegistry sources, IEventStore events, EventIngestionService ingestion, CancellationToken token) =>
         {
             await using var db = await contexts.CreateDbContextAsync(token);
             var document = await db.RawDocuments.AsNoTracking().SingleOrDefaultAsync(item => item.Id == id, token)
                 ?? throw new KeyNotFoundException();
-            if (document.HttpStatus is < 200 or > 299) return Results.BadRequest(new { message = "Нельзя разбирать неуспешный HTTP-ответ." });
+            if (document.SourceType != EventSourceType.Page) return Results.Ok(await ingestion.ReplayAsync(document, token));
+            if (document.HttpStatus is < 200 or > 299) return ApiErrors.Problem(400, "Нельзя разбирать неуспешный HTTP-ответ.");
             var source = sources.Get(document.SourceId);
             var candidates = sources.Parse(source, document.Content, document.Url);
             var results = new List<EventSaveResult>();
             foreach (var candidate in candidates)
-                results.Add(await events.SaveAsync(source, candidate, document, token));
+                results.Add(await events.SaveAsync(new(source.Id, source.Priority), candidate, document, token));
             return Results.Ok(new { rawDocumentId = id, results });
         });
 
@@ -157,6 +164,8 @@ public static class ParserEndpoints
         DateEnd = item.DateEnd,
         DurationMin = item.DurationMin,
         City = item.City,
+        CityId = item.CityId,
+        VenueId = item.VenueId,
         Venue = item.Venue,
         Address = item.Address,
         Latitude = item.Latitude,
@@ -181,7 +190,8 @@ public static class ParserEndpoints
         ReviewNote = item.ReviewNote,
         Version = item.Version,
         SourceHash = item.DataHash,
+        SourceType = item.SourceType,
         DedupKey = item.DedupKey,
-        Sources = item.Sources.Select(source => new EventSourceResponse(source.SourceId, source.SourceUrl, source.RawDocumentId, source.CheckedAt)).ToArray()
+        Sources = item.Sources.Select(source => new EventSourceResponse(source.SourceId, source.SourceUrl, source.RawDocumentId, source.CheckedAt, source.SourceType)).ToArray()
     };
 }

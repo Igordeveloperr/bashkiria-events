@@ -14,7 +14,7 @@ public sealed class ParserApiKeyFilter(IOptions<ParserOptions> options, IHostEnv
         var provided = context.HttpContext.Request.Headers["X-Parser-Key"].ToString();
         if (string.IsNullOrEmpty(expected) || !CryptographicOperations.FixedTimeEquals(
                 SHA256.HashData(Encoding.UTF8.GetBytes(provided)), SHA256.HashData(Encoding.UTF8.GetBytes(expected))))
-            return ValueTask.FromResult<object?>(Results.Problem(statusCode: 401, title: "Требуется ключ доступа к API парсера."));
+            return ValueTask.FromResult<object?>(ApiErrors.Problem(401));
         return next(context);
     }
 }

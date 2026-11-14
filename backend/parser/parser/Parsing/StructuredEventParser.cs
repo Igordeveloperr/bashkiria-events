@@ -6,13 +6,29 @@ using System.Text.RegularExpressions;
 
 namespace Bashkiria.Events.Parser.Parsing;
 
-public sealed class StructuredEventParser
+public sealed class StructuredEventParser : ISourceEventParser
 {
+    public string Kind => Sources.SourceKinds.Structured;
+
+    public Uri? NextListingPage(string html, Uri pageUrl, int nextPage)
+    {
+        var query = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(pageUrl.Query);
+        query["page"] = nextPage.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var parameters = query.SelectMany(pair => pair.Value.Select(value => new KeyValuePair<string, string?>(pair.Key, value)));
+        return new(Microsoft.AspNetCore.WebUtilities.QueryHelpers.AddQueryString(
+            new UriBuilder(pageUrl) { Query = string.Empty }.Uri.AbsoluteUri, parameters));
+    }
+
     public IReadOnlyList<EventCandidate> Parse(string html, Uri pageUrl, SourceOptions source)
     {
         using var document = new HtmlParser().ParseDocument(html);
+        return ParseRecords(StructuredDataReader.ReadEvents(document), pageUrl, source);
+    }
+
+    internal IReadOnlyList<EventCandidate> ParseRecords(IEnumerable<JsonObject> records, Uri pageUrl, SourceOptions source)
+    {
         var result = new List<EventCandidate>();
-        foreach (var data in StructuredDataReader.ReadEvents(document))
+        foreach (var data in records)
         {
             var title = Clean(StructuredDataReader.Text(data["name"]));
             if (string.IsNullOrWhiteSpace(title)) continue;

@@ -8,9 +8,11 @@ public sealed record RawDocument(
     string SourceId,
     Uri Url,
     DateTimeOffset FetchedAt,
-    int HttpStatus,
+    int? HttpStatus,
     string Content,
-    string ContentHash)
+    string ContentHash,
+    EventSourceType SourceType = EventSourceType.Page,
+    string ContentType = "text/html")
 {
     public static RawDocument Create(string sourceId, Uri url, int httpStatus, string content) =>
         new(Guid.NewGuid(), sourceId, url, DateTimeOffset.UtcNow, httpStatus, content,

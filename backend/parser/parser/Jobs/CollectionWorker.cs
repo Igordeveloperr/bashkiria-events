@@ -11,6 +11,7 @@ public sealed class CollectionWorker(IServiceScopeFactory scopes, IOptions<Parse
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        if (!options.Value.WorkerEnabled) return;
         var nextSchedule = DateTimeOffset.MinValue;
         while (!stoppingToken.IsCancellationRequested)
         {
