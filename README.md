@@ -11,10 +11,11 @@
 
 ## Единая точка входа
 
-Traefik v3.7 маршрутизирует запросы к parser, interaction и searcher.
+Traefik v3.7 маршрутизирует запросы к parser, interaction, searcher и AI (`agent`).
 В корневом `.env` должны быть заданы PARSER_API_KEY, INTERACTION_API_KEY,
 INTERACTION_ADMIN_API_KEY, INTERACTION_DELIVERY_API_KEY (три ключа interaction
 разные, не короче 32 символов). Существующий `.env` не перезаписывай примером.
+Для AI заполни ключи GigaChat и Langfuse в `backend/ai/.env` по инструкции ниже.
 
 ```powershell
 docker compose --profile gateway up -d --build --wait
@@ -26,6 +27,9 @@ docker compose --profile gateway up -d --build --wait
 | `http://localhost:8080/api/v1/interaction/me/subscriptions` | Свои подписки, нужны X-Interaction-Key и проверенный X-User-Id |
 | `http://localhost:8080/search/events` | Поиск событий |
 | `http://localhost:8080/search/docs` | Swagger поиска |
+| `http://localhost:8080/ai/api/chat` | Чат с ИИ, POST с JSON |
+| `http://localhost:8080/ai/api/tools` | Контракты инструментов ИИ |
+| `http://localhost:8080/ai/docs` | Swagger ИИ |
 | `http://localhost:8080/parser/openapi/v1.json` | OpenAPI парсера |
 | `http://localhost:8080/interaction/openapi/v1.json` | OpenAPI interaction |
 
@@ -108,7 +112,7 @@ docker compose up -d --build --wait agent
 из корневого `.env`; внешний порт PostgreSQL на это подключение не влияет.
 Локальный запуск HTTP API и CLI описан в [AI README](backend/ai/README.md).
 
-Фронтенд отправляет `POST http://localhost:8001/api/chat` с JSON:
+Через Gateway фронтенд отправляет `POST http://localhost:8080/ai/api/chat` с JSON:
 
 ```json
 {
@@ -119,8 +123,8 @@ docker compose up -d --build --wait agent
 ```
 
 Ответ находится в поле `reply`. История переписки сохраняется автоматически по паре
-`user_id` и `session_id`. Swagger: `http://localhost:8001/docs`.
-Шесть инструментов подключены к графу агента; контракты доступны через `GET /api/tools`.
+`user_id` и `session_id`. Swagger через Gateway: `http://localhost:8080/ai/docs`.
+Шесть инструментов подключены к графу агента; контракты доступны через `GET /ai/api/tools`.
 Поиск использует `searcher`; подписки и обращения — `interactionService`,
 справочник городов — `parser`. Для всех инструментов запусти:
 
@@ -153,8 +157,8 @@ depends_on:
     condition: service_completed_successfully
 ```
 
-Так backend начнёт работу после успешной миграции. Frontend и AI HTTP backend
-будут добавлены в этот Compose по мере появления их исполняемых сервисов.
+Так backend начнёт работу после успешной миграции. AI HTTP backend уже включён
+в Compose сервисом `agent`.
 
 ## Полная таблица HTTP API
 
@@ -168,7 +172,7 @@ depends_on:
 
 | Код доступа | Необходимые заголовки | Откуда взять значение |
 | --- | --- | --- |
-| — | Не требуются | Открытые поиск, health и документация |
+| — | Не требуются | Открытые поиск, AI, health и документация |
 | P | `X-Parser-Key` | PARSER_API_KEY корневого `.env` |
 | U | `X-Interaction-Key`, `X-User-Id` | INTERACTION_API_KEY и ID пользователя, проверенный доверенным backend |
 | A | `X-Interaction-Admin-Key` | INTERACTION_ADMIN_API_KEY |
@@ -364,6 +368,18 @@ date_from/date_to обязательны, from строго раньше to.
 повтор внешнего сообщения (at least once). Уведомления об отменах/переносах как
 отдельные сообщения и напоминания пока не реализованы.
 
+### AI: чат и инструменты
+
+Префикс `/ai` удаляется Gateway. Текущий прототип принимает `user_id` из JSON
+и доверяет ему; авторизация пользователей в AI пока не реализована.
+
+| Метод | Endpoint через Gateway | Доступ | JSON-тело | Успешный ответ / назначение |
+| --- | --- | --- | --- | --- |
+| POST | `/ai/api/chat` | — | Обязательны user_id, session_id, message; опциональны request_id (UUID для повторов), subscription_consent (bool, по умолчанию false) | 200, `{user_id, session_id, request_id, run_id, reply, trace_id, cached}`. История сохраняется по паре user_id/session_id |
+| GET | `/ai/api/tools` | — | Нет | 200, шесть контрактов `{name, description, parameters, returns, implemented}` |
+
+Форматы ошибок, повторы и согласие на подписку описаны в [AI README](backend/ai/README.md).
+
 ### Health, спецификации и страницы документации
 
 | Метод | Endpoint через Gateway | Доступ | Успешный ответ / назначение |
@@ -380,12 +396,18 @@ date_from/date_to обязательны, from строго раньше to.
 | GET | `/search/docs` | — | 200, Swagger UI поиска |
 | GET | `/search/redoc` | — | 200, альтернативная страница ReDoc поиска |
 | GET | `/search/docs/oauth2-redirect` | — | 200, служебная страница Swagger для OAuth2 redirect, не самостоятельный механизм авторизации |
+| GET | `/ai/health` | — | 200, `{status: ok}`: проверка процесса AI без запроса к модели |
+| GET | `/ai/openapi.json` | — | 200, OpenAPI AI с сервером `/ai` |
+| GET | `/ai/docs` | — | 200, Swagger UI AI |
+| GET | `/ai/redoc` | — | 200, ReDoc AI |
+| GET | `/ai/docs/oauth2-redirect` | — | 200, служебная страница Swagger для OAuth2 redirect |
 
 ### Endpoint’ы вне Gateway
 
-Прямые порты по умолчанию: parser 5164, interaction 5266, searcher 8000.
+Прямые порты по умолчанию: parser 5164, interaction 5266, searcher 8000, AI 8001.
 Основные пути parser/interaction совпадают с путями через Gateway; у прямого
-поиска префикс /search отсутствует. Прямые health/OpenAPI находятся в корне сервиса.
+поиска префикс /search отсутствует, у AI — /ai. Прямые health/OpenAPI находятся
+в корне сервиса. Документацию AI в контейнере открывай через Gateway.
 
 | Метод | Прямой адрес | Доступ | Тело / ответ / ограничение |
 | --- | --- | --- | --- |
@@ -396,8 +418,7 @@ date_from/date_to обязательны, from строго раньше to.
 | GET | `http://localhost:5164/parser/preview/gkz/collect` | P | Только Development: синхронно собрать до 3 страниц и сохранить события; 200, отчёт сбора |
 
 В Production preview отсутствует. В Development без настроенного ключа parser
-проверка P отключается. У миграционного сервиса HTTP endpoint’ов нет; ИИ пока
-не подключён к Gateway, поэтому его маршруты здесь не заявлены.
+проверка P отключается. У миграционного сервиса HTTP endpoint’ов нет.
 
 ### Ошибки и спецификации
 
@@ -409,8 +430,10 @@ date_from/date_to обязательны, from строго раньше to.
 | Parser: внешняя загрузка | 502 — источник недоступен, 504 — таймаут; ошибка фонового сбора находится в задании и не меняет уже выданный 202 |
 | Parser: частичный импорт | 200, ошибки конкретных строк внутри ImportResponse; испорченная структура файла отклоняет запрос целиком |
 | Searcher | 422 — валидация FastAPI (detail с ошибками полей); 404 — `{detail: "Событие не найдено"}`; 503 — `{detail: "База событий временно недоступна"}` |
+| AI | 422 — валидация FastAPI; 409 — session_busy/request_conflict; 502 — generation_failed; 503 — storage_unavailable. Ошибки сервиса: `{detail: {code, message, request_id, run_id?}}` |
 | Gateway | Неизвестный префикс — 404 Traefik; недоступный backend — ошибка прокси, обычно 502/503/504. Единого JSON-формата для ошибок самого Traefik и разных backend нет |
 
 Точные JSON-схемы доступны по перечисленным OpenAPI URL. Правила хранения,
 повторной доставки и настройки: [Parser API](backend/parser/README.md),
-[Searcher API](backend/searcher/README.md), [Interaction API](backend/interactionService/README.md).
+[Searcher API](backend/searcher/README.md), [Interaction API](backend/interactionService/README.md),
+[AI API](backend/ai/README.md).

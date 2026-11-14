@@ -84,8 +84,23 @@ docker compose logs -f agent
 
 Сервис `agent` также входит в обычный `docker compose up -d --build`.
 Он ждёт готовности PostgreSQL и успешного завершения миграций. API доступен на
-`http://localhost:8001`, Swagger — на `/docs`, healthcheck — на `/health`.
+`http://localhost:8001`, healthcheck — на `/health`.
 Внешний порт задаётся через `AGENT_HTTP_PORT` в корневом `.env`.
+
+Для доступа через общий Gateway запусти из корня:
+
+```powershell
+docker compose --profile gateway up -d --build --wait
+```
+
+Чат доступен на `POST http://localhost:8080/ai/api/chat`, инструменты — на
+`GET http://localhost:8080/ai/api/tools`, проверка процесса — на `/ai/health`.
+Swagger: `http://localhost:8080/ai/docs`, OpenAPI: `/ai/openapi.json`, ReDoc: `/ai/redoc`.
+Traefik удаляет `/ai` перед передачей запроса агенту, а Compose задаёт
+`UVICORN_ROOT_PATH=/ai`, чтобы ссылки документации и сервер OpenAPI содержали префикс.
+Прямые вызовы `/api/chat`, `/api/tools` и `/health` на порту `AGENT_HTTP_PORT`
+также доступны. Документацию контейнера открывай через Gateway; при локальном
+запуске Uvicorn без Compose документация работает на `/docs` без префикса.
 
 Compose передаёт настройки из `backend/ai/.env` и переопределяет `DATABASE_URL`:
 внутри сети используется `postgres:5432` с параметрами `POSTGRES_USER`,
@@ -141,8 +156,10 @@ docker compose --profile parser --profile interaction up -d --build --wait agent
 
 ## HTTP API для фронтенда
 
-API работает на `http://localhost:8001`. Интерактивная документация доступна на
-`/docs`, OpenAPI — на `/openapi.json`, проверка процесса — `GET /health`.
+Через Gateway базовый адрес API — `http://localhost:8080/ai`, интерактивная
+документация — `/ai/docs`, OpenAPI — `/ai/openapi.json`, проверка процесса — `GET /ai/health`.
+При локальном запуске без Gateway базовый адрес — `http://localhost:8001`,
+документация — `/docs`, OpenAPI — `/openapi.json`, проверка процесса — `GET /health`.
 Конфигурация, модель и клиент Langfuse создаются один раз при старте и закрываются
 при остановке. Синхронные вызовы БД и модели выполняются в пуле потоков FastAPI.
 
@@ -195,7 +212,7 @@ API работает на `http://localhost:8001`. Интерактивная д
 
 ```javascript
 const requestId = crypto.randomUUID(); // сохрани для повторов этого сообщения
-const response = await fetch("http://localhost:8001/api/chat", {
+const response = await fetch("http://localhost:8080/ai/api/chat", {
   method: "POST",
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({
