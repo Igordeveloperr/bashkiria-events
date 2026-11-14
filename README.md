@@ -305,6 +305,7 @@ datasetId — 1..64 символа, строчные латинские букв
 | latitude, longitude, radius_km | Указываются вместе: ±90, ±180, радиус больше 0 и не больше 20000 км |
 | sort | date_asc, date_desc, price_asc, price_desc, updated_desc, relevance; relevance требует q. По умолчанию relevance при q, иначе date_asc |
 | page, page_size | Пагинация SearchPage, ограничения указаны выше |
+| short | По умолчанию false. При true — компактная модель для ИИ, без description, sources и служебных данных. Поддерживается также поиском похожих событий |
 
 Фильтры поиска объединяются AND; значения categories/statuses внутри списка — OR.
 Для опубликованных передай statuses=Published. Без периода могут вернуться прошедшие
@@ -317,6 +318,11 @@ date_from/date_to обязательны, from строго раньше to.
 | Event | Все столбцы parser_events: соответствуют полям карточки parser в snake_case, включая normalized_title, city_id, venue_id, source_type, issues_json, data_hash, source_priority, manually_suppressed; дополнительно time_zone и sources |
 | Source | Все столбцы parser_event_sources: id, identity_key, source_id, source_type, external_id, source_url, data_hash, event_id, raw_document_id, candidate_json, checked_at |
 | SimilarPage | Пагинация SearchPage и reference_event_id; у каждого элемента items дополнительно score |
+| ShortEvent | Только id, title, category, start_date, start_time, venue, age_limit. Остальные данные доступны в полном Event |
+| ShortSimilarPage | Пагинация SearchPage и reference_event_id; items содержат ShortEvent плюс score |
+
+ИИ автоматически использует `short=true` в поиске и поиске похожих событий;
+фронтенд продолжает получать полные ответы. Флаг не ограничен авторизацией.
 
 ### Interaction: подписки, уведомления и обратная связь
 

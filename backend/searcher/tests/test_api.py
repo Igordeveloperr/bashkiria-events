@@ -39,6 +39,7 @@ def validation_client():
         {"confidence_min": "Infinity"},
         {"sort": "relevance"},
         {"q": "   "},
+        {"short": "invalid"},
     ],
 )
 def test_invalid_search_returns_422(validation_client, params):
@@ -69,6 +70,19 @@ def test_invalid_schedule_returns_422(validation_client, params):
 
 def test_openapi_has_named_get_operations_and_query_arrays(validation_client):
     document = validation_client.get("/openapi.json").json()
+    fields = {
+        "id",
+        "title",
+        "category",
+        "start_date",
+        "start_time",
+        "venue",
+        "age_limit",
+    }
+    schemas = document["components"]["schemas"]
+    assert set(schemas["ShortEventResponse"]["properties"]) == fields
+    assert set(schemas["ShortSimilarEventResponse"]["properties"]) == fields | {"score"}
+    assert fields < set(schemas["EventResponse"]["properties"])
     operations = {
         entry["get"]["operationId"]: entry["get"]
         for entry in document["paths"].values()
@@ -84,6 +98,15 @@ def test_openapi_has_named_get_operations_and_query_arrays(validation_client):
     params = {item["name"]: item for item in operations["search_events"]["parameters"]}
     assert params["tags"]["in"] == "query"
     assert params["tags"]["schema"]["type"] == "array"
+    assert params["short"]["schema"]["type"] == "boolean"
+    assert params["short"]["schema"]["default"] is False
+    response_schema = operations["search_events"]["responses"]["200"]["content"][
+        "application/json"
+    ]["schema"]
+    assert {item["$ref"] for item in response_schema["anyOf"]} == {
+        "#/components/schemas/EventPage",
+        "#/components/schemas/ShortEventPage",
+    }
     similar_params = {
         item["name"]: item for item in operations["find_similar"]["parameters"]
     }
@@ -97,8 +120,17 @@ def test_openapi_has_named_get_operations_and_query_arrays(validation_client):
         "date_from",
         "date_to",
         "public_only",
+        "short",
     }
     assert similar_params["min_score"]["schema"]["default"] == 0.15
+    assert similar_params["short"]["schema"]["default"] is False
+    similar_response = operations["find_similar"]["responses"]["200"]["content"][
+        "application/json"
+    ]["schema"]
+    assert {item["$ref"] for item in similar_response["anyOf"]} == {
+        "#/components/schemas/SimilarPage",
+        "#/components/schemas/ShortSimilarPage",
+    }
 
 
 @pytest.mark.parametrize(
@@ -107,6 +139,7 @@ def test_openapi_has_named_get_operations_and_query_arrays(validation_client):
         {"q": "сказка"},
         {"statuses": "Published"},
         {"include_past": "true"},
+        {"short": "invalid"},
     ],
 )
 def test_similar_does_not_accept_search_filters(validation_client, params):

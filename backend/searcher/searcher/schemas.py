@@ -143,6 +143,10 @@ class EventFilters(BaseModel):
 
 
 class SearchQuery(EventFilters, Pagination):
+    short: bool = Field(
+        default=False,
+        description="Компактные события для ИИ: без description, исходных JSON и служебных данных",
+    )
     sort: (
         Literal[
             "date_asc",
@@ -182,6 +186,10 @@ class ScheduleQuery(Pagination):
 
 
 class SimilarQuery(Pagination):
+    short: bool = Field(
+        default=False,
+        description="Компактные похожие события для ИИ, без description и источников",
+    )
     min_score: float = Field(default=0.15, ge=0, le=1, allow_inf_nan=False)
     city: SearchText | None = None
     date_from: AwareDatetime | None = None
@@ -267,14 +275,35 @@ class EventResponse(BaseModel):
     sources: list[SourceResponse]
 
 
-class EventPage(BaseModel):
-    items: list[EventResponse]
+class ShortEventResponse(BaseModel):
+    """Facts needed to select and recommend an event without parser payloads."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    title: str
+    category: Category
+    start_date: date | None
+    start_time: time | None
+    venue: str
+    age_limit: int | None
+
+
+class PageMetadata(BaseModel):
     total: int
     page: int
     page_size: int
     pages: int
     has_next: bool
     has_previous: bool
+
+
+class EventPage(PageMetadata):
+    items: list[EventResponse]
+
+
+class ShortEventPage(PageMetadata):
+    items: list[ShortEventResponse]
 
 
 class SchedulePage(EventPage):
@@ -291,3 +320,12 @@ class SimilarEventResponse(EventResponse):
 class SimilarPage(EventPage):
     reference_event_id: UUID
     items: list[SimilarEventResponse]
+
+
+class ShortSimilarEventResponse(ShortEventResponse):
+    score: float = Field(ge=0, le=1, allow_inf_nan=False)
+
+
+class ShortSimilarPage(ShortEventPage):
+    reference_event_id: UUID
+    items: list[ShortSimilarEventResponse]

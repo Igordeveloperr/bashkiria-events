@@ -17,6 +17,8 @@ from searcher.schemas import (
     SchedulePage,
     ScheduleQuery,
     SearchQuery,
+    ShortEventPage,
+    ShortSimilarPage,
     SimilarPage,
     SimilarQuery,
 )
@@ -28,6 +30,7 @@ DatabaseSession = Annotated[Session, Depends(get_session)]
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     configured = settings or Settings()
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.settings = configured
@@ -64,7 +67,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get(
         "/events",
-        response_model=EventPage,
+        response_model=EventPage | ShortEventPage,
         tags=["events"],
         operation_id="search_events",
     )
@@ -84,7 +87,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get(
         "/events/{event_id}/similar",
-        response_model=SimilarPage,
+        response_model=SimilarPage | ShortSimilarPage,
         tags=["events"],
         operation_id="find_similar",
     )

@@ -29,6 +29,9 @@ def event(**changes):
         "date_end": None,
         "start_date": "2035-01-10",
         "start_time": "19:00:00",
+        "end_date": None,
+        "end_time": None,
+        "time_zone": "Asia/Yekaterinburg",
         "city": "Уфа",
         "venue": "ГКЗ Башкортостан",
         "price_min": "500.50",
@@ -50,6 +53,19 @@ def event(**changes):
         "issues_json": {"private_parser_field": "not for the model"},
         **changes,
     }
+
+
+def compact_event(item):
+    fields = {
+        "id",
+        "title",
+        "category",
+        "start_date",
+        "start_time",
+        "venue",
+        "age_limit",
+    }
+    return {key: value for key, value in item.items() if key in fields}
 
 
 class ToolFixture:
@@ -82,12 +98,20 @@ class ToolFixture:
         self.requests.append(request)
         path = request.url.path
         if path == "/events":
-            return httpx.Response(200, json={"items": [self.item], "total": 11})
+            item = (
+                compact_event(self.item)
+                if request.url.params.get("short") == "true"
+                else self.item
+            )
+            return httpx.Response(200, json={"items": [item], "total": 11})
         if path == f"/events/{EVENT_ID}":
             return httpx.Response(200, json=self.item)
         if path.endswith("/similar"):
+            item = event(id=str(SIMILAR_ID))
+            if request.url.params.get("short") == "true":
+                item = compact_event(item)
             return httpx.Response(
-                200, json={"items": [event(id=str(SIMILAR_ID), score=0.7)], "total": 1}
+                200, json={"items": [{**item, "score": 0.7}], "total": 1}
             )
         if path == "/venues/schedule":
             return httpx.Response(
@@ -151,6 +175,7 @@ class ToolTest(ToolFixture, unittest.TestCase):
             dict(query),
             {
                 "public_only": "true",
+                "short": "true",
                 "page_size": "3",
                 "offset": "7",
                 "date_from": "2035-01-10T00:00:00+05:00",
@@ -164,18 +189,54 @@ class ToolTest(ToolFixture, unittest.TestCase):
             },
         )
         self.assertEqual((result.total, result.limit, result.offset), (11, 3, 7))
-        self.assertEqual(result.events[0].price_min, Decimal("500.50"))
-        self.assertIsNone(result.events[0].is_free)
+        self.assertEqual(
+            result.events[0].model_dump(mode="json"),
+            {**compact_event(self.item), "category": "concert"},
+        )
         self.assertIsNone(result.events[0].age_limit)
         self.assertNotIn("issues_json", result.model_dump_json())
         self.assertNotIn("X-Parser-Key", self.requests[-1].headers)
         self.assertNotIn("X-Interaction-Key", self.requests[-1].headers)
 
+    def test_short_search_keeps_only_seven_fields_and_unknown_time(self):
+        self.item.update(start_time=None, duration_min=90, language="Русский")
+        result = self.invoke("search_events", {})
+        item = result.events[0]
+        self.assertIsNone(item.start_time)
+        self.assertEqual(item.start_date.isoformat(), "2035-01-10")
+        self.assertEqual(set(item.model_dump()), set(compact_event(self.item)))
+        payload = result.model_dump_json()
+        for field in ("description", "sources", "issues_json", "verified_at"):
+            self.assertNotIn(field, payload)
+
+    def test_full_card_tolerates_invalid_organizer_url(self):
+        self.item["org_link"] = "not-a-url"
+        self.assertIsNone(
+            self.invoke("get_event", {"event_id": str(EVENT_ID)}).event.org_link
+        )
+
     def test_get_event_maps_card_and_preserves_unknown_time(self):
-        self.item.update(date_start=None, start_time=None)
+        self.item.update(
+            date_start=None, start_time=None, duration_min=90, language="Русский"
+        )
         card = self.invoke("get_event", {"event_id": str(EVENT_ID)}).event
         self.assertEqual(card.category, "concert")
         self.assertEqual(card.lat, 54.7)
+        self.assertEqual(card.lon, 55.9)
+        self.assertEqual(card.tags, ["джаз"])
+        self.assertEqual(card.city, "Уфа")
+        self.assertEqual(card.address, "ул. Ленина, 50")
+        self.assertEqual(card.duration_min, 90)
+        self.assertEqual(card.language, "Русский")
+        self.assertEqual(card.price_min, Decimal("500.50"))
+        self.assertIsNone(card.price_max)
+        self.assertIsNone(card.is_free)
+        self.assertIsNone(card.end_date)
+        self.assertIsNone(card.end_time)
+        self.assertEqual(card.time_zone, "Asia/Yekaterinburg")
+        self.assertEqual(str(card.org_link), "https://tickets.example/event")
+        self.assertEqual(card.status, "published")
+        self.assertEqual(card.source_status, "Scheduled")
         self.assertEqual(str(card.source_url), "https://events.example/event")
         self.assertIsNone(card.date_start)
         self.assertIsNone(card.start_time)
@@ -197,9 +258,16 @@ class ToolTest(ToolFixture, unittest.TestCase):
         self.assertEqual(query["city"], "Уфа")
         self.assertEqual(query["page_size"], "2")
         self.assertEqual(query["public_only"], "true")
+        self.assertEqual(query["short"], "true")
         self.assertEqual(query["date_to"], "2035-01-12T00:00:00+05:00")
         self.assertEqual(result.events[0].event.id, SIMILAR_ID)
         self.assertEqual(result.events[0].score, 0.7)
+        self.assertEqual(result.events[0].event.start_time.isoformat(), "19:00:00")
+        self.assertEqual(
+            set(result.events[0].event.model_dump()), set(compact_event(self.item))
+        )
+        self.assertNotIn("description", result.model_dump_json())
+        self.assertNotIn("sources", result.model_dump_json())
 
     def test_schedule_preserves_period_and_arbitrary_offset(self):
         result = self.invoke(
@@ -215,6 +283,9 @@ class ToolTest(ToolFixture, unittest.TestCase):
         self.assertEqual(self.requests[-1].url.params["offset"], "3")
         self.assertEqual(result.period.start.isoformat(), PERIOD["start"])
         self.assertEqual((result.total, result.offset, result.limit), (5, 3, 2))
+        self.assertEqual(
+            set(result.events[0].model_dump()), set(compact_event(self.item))
+        )
 
     def test_subscribe_uses_canonical_city_and_trusted_consent_and_identity(self):
         args = {"city": "Ufa", "period": PERIOD, "category": "lecture"}
@@ -378,6 +449,17 @@ class GraphToolsTest(ToolFixture, unittest.TestCase):
         self.assertTrue(
             all(isinstance(json.loads(message.content), dict) for message in messages)
         )
+        for message in messages:
+            if message.name in ("search_events", "find_similar"):
+                payload = json.loads(message.content)
+                item = payload["events"][0]
+                if message.name == "find_similar":
+                    self.assertEqual(item["score"], 0.7)
+                    item = item["event"]
+                self.assertEqual(item["start_time"], "19:00:00")
+                self.assertEqual(set(item), set(compact_event(self.item)))
+                self.assertNotIn("description", item)
+                self.assertNotIn("sources", item)
         self.assertEqual(result["messages"][-1].content, "Готово")
 
     def test_invalid_arguments_and_unknown_tools_are_returned_as_errors(self):

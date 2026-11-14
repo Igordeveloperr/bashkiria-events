@@ -3,7 +3,7 @@ from uuid import uuid4
 
 import pytest
 from conftest import START
-from sqlalchemy import inspect, text
+from sqlalchemy import event, inspect, text
 
 from searcher.main import DatabaseSession
 from searcher.models import Event, EventSource
@@ -53,6 +53,87 @@ def test_pagination_is_stable_counts_events_once_and_handles_empty_pages(
     assert pages[2]["has_next"] is False
     assert pages[3]["items"] == []
     assert pages[3]["total"] == 5
+
+
+def test_short_search_returns_facts_without_loading_large_payloads(
+    client, event_factory
+):
+    event_factory(description="Уникальныймаркер " * 1000, source_count=2)
+    event_factory(description="Уникальныймаркер " * 1000, source_count=2)
+    event_factory(status="Draft", description="Уникальныймаркер")
+    event_factory(manually_suppressed=True, description="Уникальныймаркер")
+    params = {
+        "public_only": True,
+        "q": "Уникальныймаркер",
+        "city": "Уфа",
+        "price_to": 1000,
+        "tags": "джаз",
+        "age_limit_max": 6,
+        "page_size": 1,
+        "offset": 1,
+    }
+    full = client.get("/events", params=params).json()
+    assert client.get("/events", params={**params, "short": False}).json() == full
+
+    statements = []
+
+    def capture(connection, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    engine = client.app.state.sessions.kw["bind"]
+    event.listen(engine, "before_cursor_execute", capture)
+    try:
+        response = client.get("/events", params={**params, "short": True})
+    finally:
+        event.remove(engine, "before_cursor_execute", capture)
+
+    assert response.status_code == 200, response.text
+    short = response.json()
+    assert {key: value for key, value in short.items() if key != "items"} == {
+        key: value for key, value in full.items() if key != "items"
+    }
+    expected_fields = {
+        "id",
+        "title",
+        "category",
+        "start_date",
+        "start_time",
+        "venue",
+        "age_limit",
+    }
+    assert short["items"] == [
+        {
+            key: value
+            for key, value in full["items"][0].items()
+            if key in expected_fields
+        }
+    ]
+    assert set(short["items"][0]) == expected_fields
+    # Description remains searchable, but is not selected or sent to the client.
+    event_select = next(sql for sql in statements if "LIMIT" in sql)
+    projection = event_select.split("FROM", 1)[0]
+    assert "description" not in projection
+    assert "issues_json" not in projection
+    assert all(
+        f"parser_events.{field}" not in projection
+        for field in set(Event.__table__.columns.keys()) - expected_fields
+    )
+    assert all("parser_event_sources" not in sql for sql in statements)
+
+
+def test_short_search_preserves_unknown_dates_and_empty_pages(client, event_factory):
+    event_id = event_factory(
+        status="Draft", start=None, end=None, price_min=None, price_max=None
+    )
+    response = client.get("/events", params={"short": True})
+    assert ids(response) == [event_id]
+    item = response.json()["items"][0]
+    assert item["start_date"] is None
+    assert item["start_time"] is None
+    assert "price_min" not in item
+    empty = client.get("/events", params={"short": True, "offset": 10}).json()
+    assert empty["items"] == []
+    assert empty["total"] == 1
 
 
 @pytest.mark.parametrize("params", [{}, {"q": "джаз"}, {"city": "Уфа"}])
@@ -400,6 +481,74 @@ def test_similar_applies_agent_city_period_and_public_filter_before_limit(
     )
     assert ids(result) == [expected]
     assert result.json()["total"] == 1
+
+
+@pytest.mark.parametrize("public_only", [False, True])
+def test_short_similar_preserves_scores_filters_pagination_and_skips_payloads(
+    client, event_factory, public_only
+):
+    reference = event_factory(description="Джазовый концерт " * 1000)
+    for _ in range(3):
+        event_factory(description="Джазовый концерт " * 1000, source_count=2)
+    event_factory(status="Draft")
+    event_factory(manually_suppressed=True)
+    event_factory(city="Москва")
+    path = f"/events/{reference}/similar"
+    params = {
+        "city": "Уфа",
+        "public_only": public_only,
+        "page_size": 2,
+        "offset": 1,
+        "date_from": START.isoformat(),
+        "date_to": (START + timedelta(days=1)).isoformat(),
+    }
+    full_response = client.get(path, params=params)
+    assert full_response.status_code == 200, full_response.text
+    full = full_response.json()
+    assert client.get(path, params={**params, "short": False}).json() == full
+    statements = []
+
+    def capture(connection, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    engine = client.app.state.sessions.kw["bind"]
+    event.listen(engine, "before_cursor_execute", capture)
+    try:
+        response = client.get(path, params={**params, "short": True})
+    finally:
+        event.remove(engine, "before_cursor_execute", capture)
+    assert response.status_code == 200, response.text
+    short = response.json()
+    assert short["reference_event_id"] == reference
+    assert {k: v for k, v in short.items() if k != "items"} == {
+        k: v for k, v in full.items() if k != "items"
+    }
+    assert short["items"]
+    for compact, original in zip(short["items"], full["items"], strict=True):
+        assert compact == {key: original[key] for key in compact}
+        assert set(compact) == {
+            "score",
+            "id",
+            "title",
+            "category",
+            "start_date",
+            "start_time",
+            "venue",
+            "age_limit",
+        }
+        assert (
+            not {"description", "sources", "issues_json", "data_hash"} & compact.keys()
+        )
+    # Only the reference description is loaded for ranking; parser payloads are not.
+    assert all("parser_events.issues_json" not in sql for sql in statements)
+    assert all("parser_event_sources" not in sql for sql in statements)
+    empty = client.get(path, params={**params, "short": True, "offset": 100}).json()
+    assert empty["items"] == []
+    assert empty["total"] == full["total"]
+    assert (
+        client.get(f"/events/{uuid4()}/similar", params={"short": True}).status_code
+        == 404
+    )
 
 
 def test_similar_finds_draft_sessions_without_tags_category_or_end_time(

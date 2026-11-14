@@ -1,7 +1,7 @@
 from uuid import UUID
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, load_only, selectinload
 
 from searcher.models import Event
 from searcher.queries import (
@@ -20,6 +20,10 @@ from searcher.schemas import (
     SchedulePage,
     ScheduleQuery,
     SearchQuery,
+    ShortEventPage,
+    ShortEventResponse,
+    ShortSimilarEventResponse,
+    ShortSimilarPage,
     SimilarEventResponse,
     SimilarPage,
     SimilarQuery,
@@ -44,7 +48,7 @@ class EventSearchService:
             raise EventNotFoundError(str(event_id))
         return EventResponse.model_validate(event)
 
-    def search_events(self, query: SearchQuery) -> EventPage:
+    def search_events(self, query: SearchQuery) -> EventPage | ShortEventPage:
         statement = select(Event).where(*filter_conditions(query))
         date_order = (
             Event.start_date.asc().nulls_last(),
@@ -73,7 +77,9 @@ class EventSearchService:
             if sort == "relevance"
             else sorts[sort]
         )
-        return self._page(statement.order_by(*order, Event.id), query)
+        return self._page(
+            statement.order_by(*order, Event.id), query, short=query.short
+        )
 
     def get_venue_schedule(self, query: ScheduleQuery) -> SchedulePage:
         conditions = [
@@ -107,8 +113,26 @@ class EventSearchService:
             date_to=query.date_to,
         )
 
-    def find_similar(self, event_id: UUID, query: SimilarQuery) -> SimilarPage:
-        reference = self.session.get(Event, event_id)
+    def find_similar(
+        self, event_id: UUID, query: SimilarQuery
+    ) -> SimilarPage | ShortSimilarPage:
+        # Similarity still needs the reference description, but not its parser payloads.
+        reference_options = (
+            [
+                load_only(
+                    Event.normalized_title,
+                    Event.description,
+                    Event.tags,
+                    Event.category,
+                    Event.city,
+                    Event.venue,
+                    raiseload=True,
+                )
+            ]
+            if query.short
+            else []
+        )
+        reference = self.session.get(Event, event_id, options=reference_options)
         if reference is None:
             raise EventNotFoundError(str(event_id))
         score, candidate = similarity(reference)
@@ -130,35 +154,50 @@ class EventSearchService:
                 Event.id,
             )
         )
-        total, rows = self._rows(statement, query)
+        total, rows = self._rows(statement, query, short=query.short)
+        event_model = ShortEventResponse if query.short else EventResponse
+        similar_model = (
+            ShortSimilarEventResponse if query.short else SimilarEventResponse
+        )
+        page_model = ShortSimilarPage if query.short else SimilarPage
         items = [
-            SimilarEventResponse(
-                **EventResponse.model_validate(event).model_dump(), score=float(score)
+            similar_model(
+                **event_model.model_validate(event).model_dump(), score=float(score)
             )
             for event, score in rows
         ]
-        return SimilarPage(
+        return page_model(
             items=items, reference_event_id=event_id, **self._metadata(total, query)
         )
 
-    def _rows(self, statement, query: Pagination):
+    def _rows(self, statement, query: Pagination, *, short: bool = False):
         total = self.session.scalar(
             statement.with_only_columns(
                 func.count(), maintain_column_froms=True
             ).order_by(None)
         )
-        # Load sources once for this page, after LIMIT; no duplicate events or N+1 queries.
+        # Short responses need neither large event columns nor parser source JSON.
+        options = (
+            load_only(
+                *(getattr(Event, field) for field in ShortEventResponse.model_fields),
+                raiseload=True,
+            )
+            if short
+            else selectinload(Event.sources)
+        )
         rows = self.session.execute(
-            statement.options(selectinload(Event.sources))
-            .limit(query.page_size)
-            .offset(query.start_offset)
+            statement.options(options).limit(query.page_size).offset(query.start_offset)
         ).all()
         return total, rows
 
-    def _page(self, statement, query: Pagination) -> EventPage:
-        total, rows = self._rows(statement, query)
-        return EventPage(
-            items=[EventResponse.model_validate(row[0]) for row in rows],
+    def _page(
+        self, statement, query: Pagination, *, short: bool = False
+    ) -> EventPage | ShortEventPage:
+        total, rows = self._rows(statement, query, short=short)
+        page_model = ShortEventPage if short else EventPage
+        event_model = ShortEventResponse if short else EventResponse
+        return page_model(
+            items=[event_model.model_validate(row[0]) for row in rows],
             **self._metadata(total, query),
         )
 

@@ -205,6 +205,21 @@ class ChatApiTest(unittest.TestCase):
             for key in ("parameters", "returns"):
                 check_references(contract[key], contract[key])
                 self.assertEqual(contract[key]["type"], "object")
+        for contract in contracts:
+            if contract["name"] in ("search_events", "find_similar"):
+                self.assertNotIn("short", contract["parameters"]["properties"])
+                event_schema = contract["returns"]["$defs"]["EventSummary"]
+                fields = {
+                    "id",
+                    "title",
+                    "category",
+                    "start_date",
+                    "start_time",
+                    "venue",
+                    "age_limit",
+                }
+                self.assertEqual(set(event_schema["properties"]), fields)
+                self.assertEqual(set(event_schema["required"]), fields)
         self.service.send_message.assert_not_called()
 
     def test_lifespan_creates_one_service_and_closes_it(self):

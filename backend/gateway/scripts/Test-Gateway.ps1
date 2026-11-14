@@ -36,6 +36,22 @@ try {
     $null = Check '/api/v1/interaction/admin/feedback' 401 $user
     $null = Check '/api/v1/interaction/deliveries/claim' 405
     $searchPage = (Check '/search/events?page=1&page_size=1').Content | ConvertFrom-Json
+    $shortPage = (Check '/search/events?page=1&page_size=1&short=true').Content | ConvertFrom-Json
+    $shortFields = @('id', 'title', 'category', 'start_date', 'start_time', 'venue', 'age_limit')
+    foreach ($item in $shortPage.items) {
+        if (Compare-Object -ReferenceObject $shortFields -DifferenceObject @($item.PSObject.Properties.Name)) {
+            throw 'Short search response must contain exactly seven event fields.'
+        }
+    }
+    if (@($searchPage.items).Count -gt 0) {
+        $eventId = $searchPage.items[0].id
+        $similar = (Check "/search/events/$eventId/similar?page_size=1&short=true").Content | ConvertFrom-Json
+        foreach ($item in $similar.items) {
+            if (Compare-Object -ReferenceObject ($shortFields + @('score')) -DifferenceObject @($item.PSObject.Properties.Name)) {
+                throw 'Short similar response has an invalid event payload.'
+            }
+        }
+    }
     $docs = Check '/search/docs'
     if ($docs.Content -notmatch '/search/openapi.json') { throw 'Swagger uses the wrong OpenAPI URL.' }
     $schema = (Check '/search/openapi.json').Content | ConvertFrom-Json

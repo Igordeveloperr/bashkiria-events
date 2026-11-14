@@ -72,40 +72,43 @@ class EventSummary(BaseModel):
     id: UUID = Field(description="Идентификатор события")
     title: Text = Field(description="Название события")
     category: EventCategory
-    tags: list[str] = Field(description="Тематические метки")
-    date_start: AwareDatetime | None = Field(
-        description="Начало с часовым поясом; null при неизвестном времени"
-    )
-    date_end: AwareDatetime | None = Field(description="Окончание, если известно")
-    start_date: date | None = None
-    start_time: time | None = None
-    end_date: date | None = None
-    end_time: time | None = None
-    time_zone: str = "Asia/Yekaterinburg"
-    city: Text
-    venue: Text
-    price_min: Amount | None = Field(description="Минимальная цена; null — неизвестна")
-    price_max: Amount | None = Field(description="Максимальная цена; null — неизвестна")
-    is_free: bool | None
-    age_limit: Literal[0, 6, 12, 16, 18] | None
-    source_status: str = "Unknown"
+    start_date: date | None
+    start_time: time | None
+    venue: str
+    age_limit: int | None
 
 
 class EventCard(EventSummary):
     """Полная публичная карточка события."""
 
-    description: str
+    tags: list[str] = Field(description="Тематические метки")
+    date_start: AwareDatetime | None = Field(
+        default=None,
+        description="Начало с часовым поясом; null при неизвестном времени",
+    )
+    date_end: AwareDatetime | None = Field(
+        default=None, description="Окончание, если известно"
+    )
+    end_date: date | None = None
+    end_time: time | None = None
+    time_zone: str = "Asia/Yekaterinburg"
+    city: Text
     address: str
     lat: Annotated[float, Field(ge=-90, le=90)] | None
     lon: Annotated[float, Field(ge=-180, le=180)] | None
     duration_min: Annotated[int, Field(ge=0)] | None
     language: str | None
     org_link: HttpUrl | None = Field(description="Ссылка на организатора или билеты")
+    status: Literal["published", "draft", "cancelled"]
+    price_min: Amount | None = Field(description="Минимальная цена; null — неизвестна")
+    price_max: Amount | None = Field(description="Максимальная цена; null — неизвестна")
+    is_free: bool | None
+    source_status: str = "Unknown"
+    description: str
     source_url: HttpUrl | None = Field(
         description="Публичная ссылка на источник, если есть"
     )
     verified_at: AwareDatetime | None = Field(description="Когда проверен источник")
-    status: Literal["published", "draft", "cancelled"]
 
 
 class SearchEventsResult(BaseModel):

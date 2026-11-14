@@ -60,7 +60,12 @@ def public_event(event: dict) -> bool:
 
 
 def summary(event: dict) -> EventSummary:
-    return EventSummary.model_validate({**event, "category": event["category"].lower()})
+    return EventSummary.model_validate(
+        {
+            **event,
+            "category": event["category"].lower(),
+        }
+    )
 
 
 def http_url(value) -> str | None:
@@ -156,6 +161,7 @@ class ToolBackend:
     ):
         params = {
             "public_only": True,
+            "short": True,
             "page_size": limit,
             "offset": offset,
             **period_params(period),
@@ -190,22 +196,13 @@ class ToolBackend:
         ]
         card = EventCard.model_validate(
             {
+                **event,
                 **summary(event).model_dump(),
-                **{
-                    key: event.get(key)
-                    for key in (
-                        "description",
-                        "address",
-                        "duration_min",
-                        "language",
-                        "verified_at",
-                    )
-                },
+                "status": event["status"].lower(),
                 "lat": event.get("latitude"),
                 "lon": event.get("longitude"),
                 "org_link": http_url(event.get("org_link")),
                 "source_url": next((url for url in sources if url), None),
-                "status": event["status"].lower(),
             }
         )
         return GetEventResult(event=card)
@@ -213,7 +210,12 @@ class ToolBackend:
     def find_similar(self, event_id: UUID, *, city=None, period=None, limit=10):
         if self.get_event(event_id).event is None:
             raise ToolServiceError("not_found", "Исходное событие не найдено.")
-        params = {"page_size": limit, "public_only": True, **period_params(period)}
+        params = {
+            "page_size": limit,
+            "public_only": True,
+            "short": True,
+            **period_params(period),
+        }
         if city is not None:
             params["city"] = city
         page = self._request(
