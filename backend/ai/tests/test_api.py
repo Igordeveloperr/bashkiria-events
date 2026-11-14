@@ -30,7 +30,9 @@ class ChatApiTest(unittest.TestCase):
             "message": "Что посмотреть в Уфе?",
             "request_id": str(uuid4()),
         }
-        self.client = TestClient(create_app(self.service, cors_origins=["http://frontend.test"]))
+        self.client = TestClient(
+            create_app(self.service, cors_origins=["http://frontend.test"])
+        )
         self.client.__enter__()
         self.addCleanup(self.client.__exit__, None, None, None)
 
@@ -42,6 +44,7 @@ class ChatApiTest(unittest.TestCase):
             session_key=self.payload["session_id"],
             request_id=UUID(self.payload["request_id"]),
             content=self.payload["message"],
+            subscription_consent=False,
         )
         body = response.json()
         self.assertEqual(body["user_id"], self.payload["user_id"])
@@ -57,7 +60,27 @@ class ChatApiTest(unittest.TestCase):
         response = self.client.post("/api/chat", json=self.payload)
         self.assertEqual(response.status_code, 200)
         generated_id = UUID(response.json()["request_id"])
-        self.assertEqual(self.service.send_message.call_args.kwargs["request_id"], generated_id)
+        self.assertEqual(
+            self.service.send_message.call_args.kwargs["request_id"], generated_id
+        )
+
+    def test_explicit_subscription_consent_is_forwarded_separately_from_text(self):
+        response = self.client.post(
+            "/api/chat", json={**self.payload, "subscription_consent": True}
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIs(
+            self.service.send_message.call_args.kwargs["subscription_consent"], True
+        )
+        for invalid in ("true", 1, None):
+            with self.subTest(value=invalid):
+                self.assertEqual(
+                    self.client.post(
+                        "/api/chat",
+                        json={**self.payload, "subscription_consent": invalid},
+                    ).status_code,
+                    422,
+                )
 
     def test_invalid_payload_never_reaches_chat_service(self):
         invalid = [
@@ -77,14 +100,24 @@ class ChatApiTest(unittest.TestCase):
         invalid.append({**self.payload, "unknown": "unexpected"})
         for payload in invalid:
             with self.subTest(payload=payload):
-                self.assertEqual(self.client.post("/api/chat", json=payload).status_code, 422)
+                self.assertEqual(
+                    self.client.post("/api/chat", json=payload).status_code, 422
+                )
         self.service.send_message.assert_not_called()
 
     def test_service_errors_have_stable_codes_and_do_not_expose_backend_details(self):
         cases = (
             (SessionBusyError("Диалог занят"), 409, "session_busy"),
-            (RequestConflictError("UUID использован с другим текстом"), 409, "request_conflict"),
-            (ChatRunFailedError(self.run_id, "provider-private-value"), 502, "generation_failed"),
+            (
+                RequestConflictError("UUID использован с другим текстом"),
+                409,
+                "request_conflict",
+            ),
+            (
+                ChatRunFailedError(self.run_id, "provider-private-value"),
+                502,
+                "generation_failed",
+            ),
             (OperationalError("database-private-value"), 503, "storage_unavailable"),
         )
         for error, status, code in cases:
@@ -102,9 +135,12 @@ class ChatApiTest(unittest.TestCase):
     def test_cached_reply_is_passed_through(self):
         self.service.send_message.side_effect = None
         self.service.send_message.return_value = ChatReply(
-            session_id=self.internal_session, run_id=self.run_id,
-            request_id=UUID(self.payload["request_id"]), content="Сохранённый ответ",
-            trace_id="trace-123", cached=True,
+            session_id=self.internal_session,
+            run_id=self.run_id,
+            request_id=UUID(self.payload["request_id"]),
+            content="Сохранённый ответ",
+            trace_id="trace-123",
+            cached=True,
         )
         response = self.client.post("/api/chat", json=self.payload)
         self.assertEqual(response.status_code, 200)
@@ -112,14 +148,25 @@ class ChatApiTest(unittest.TestCase):
         self.assertEqual(response.json()["trace_id"], "trace-123")
 
     def test_cors_preflight_and_response_allow_configured_frontend(self):
-        headers = {"Origin": "http://frontend.test", "Access-Control-Request-Method": "POST",
-                   "Access-Control-Request-Headers": "content-type"}
+        headers = {
+            "Origin": "http://frontend.test",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        }
         response = self.client.options("/api/chat", headers=headers)
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.headers["access-control-allow-origin"], "http://frontend.test")
-        response = self.client.post("/api/chat", json=self.payload, headers={"Origin": headers["Origin"]})
-        self.assertEqual(response.headers["access-control-allow-origin"], "http://frontend.test")
-        response = self.client.options("/api/chat", headers={**headers, "Origin": "http://unlisted.test"})
+        self.assertEqual(
+            response.headers["access-control-allow-origin"], "http://frontend.test"
+        )
+        response = self.client.post(
+            "/api/chat", json=self.payload, headers={"Origin": headers["Origin"]}
+        )
+        self.assertEqual(
+            response.headers["access-control-allow-origin"], "http://frontend.test"
+        )
+        response = self.client.options(
+            "/api/chat", headers={**headers, "Origin": "http://unlisted.test"}
+        )
         self.assertEqual(response.status_code, 400)
         self.assertNotIn("access-control-allow-origin", response.headers)
 
@@ -127,9 +174,17 @@ class ChatApiTest(unittest.TestCase):
         response = self.client.get("/api/tools")
         self.assertEqual(response.status_code, 200)
         contracts = response.json()
-        self.assertEqual({contract["name"] for contract in contracts}, {
-            "search_events", "get_event", "find_similar", "get_venue_schedule", "subscribe", "save_feedback",
-        })
+        self.assertEqual(
+            {contract["name"] for contract in contracts},
+            {
+                "search_events",
+                "get_event",
+                "find_similar",
+                "get_venue_schedule",
+                "subscribe",
+                "save_feedback",
+            },
+        )
 
         def check_references(node, root):
             if isinstance(node, dict):
@@ -145,7 +200,7 @@ class ChatApiTest(unittest.TestCase):
                     check_references(value, root)
 
         for contract in contracts:
-            self.assertFalse(contract["implemented"])
+            self.assertTrue(contract["implemented"])
             self.assertTrue(contract["description"])
             for key in ("parameters", "returns"):
                 check_references(contract[key], contract[key])
@@ -161,11 +216,16 @@ class ChatApiTest(unittest.TestCase):
             yield self.service
             events.append("stop")
 
-        with patch("api.load_config") as load, patch("api.create_chat_service", side_effect=runtime) as factory:
+        with (
+            patch("api.load_config") as load,
+            patch("api.create_chat_service", side_effect=runtime) as factory,
+        ):
             app = create_app(cors_origins=[])
             with TestClient(app) as client:
                 for _ in range(2):
-                    self.assertEqual(client.post("/api/chat", json=self.payload).status_code, 200)
+                    self.assertEqual(
+                        client.post("/api/chat", json=self.payload).status_code, 200
+                    )
                 self.assertEqual(events, ["start"])
             self.assertEqual(events, ["start", "stop"])
             load.assert_called_once_with()

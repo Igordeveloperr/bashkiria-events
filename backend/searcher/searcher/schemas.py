@@ -54,10 +54,26 @@ class Pagination(BaseModel):
 
     page: int = Field(default=1, ge=1, le=1_000_000)
     page_size: int = Field(default=50, ge=1, le=500)
+    offset: int | None = Field(
+        default=None,
+        ge=0,
+        le=9223372036854775807,
+        description="Смещение; при наличии заменяет page",
+    )
+
+    @property
+    def start_offset(self) -> int:
+        return (
+            self.offset if self.offset is not None else (self.page - 1) * self.page_size
+        )
 
 
 class EventFilters(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+    public_only: bool = Field(
+        default=False, description="Только опубликованные события без ручного скрытия"
+    )
 
     q: SearchText | None = Field(
         default=None, description="Полный текст, часть названия или опечатка"
@@ -167,6 +183,20 @@ class ScheduleQuery(Pagination):
 
 class SimilarQuery(Pagination):
     min_score: float = Field(default=0.15, ge=0, le=1, allow_inf_nan=False)
+    city: SearchText | None = None
+    date_from: AwareDatetime | None = None
+    date_to: AwareDatetime | None = None
+    public_only: bool = False
+
+    @model_validator(mode="after")
+    def valid_period(self) -> Self:
+        if (
+            self.date_from is not None
+            and self.date_to is not None
+            and self.date_from >= self.date_to
+        ):
+            raise ValueError("date_from должен быть раньше date_to")
+        return self
 
 
 class SourceResponse(BaseModel):
@@ -175,6 +205,7 @@ class SourceResponse(BaseModel):
     id: UUID
     identity_key: str
     source_id: str
+    source_type: Literal["Page", "Import", "Manual"]
     external_id: str
     source_url: str
     data_hash: str
@@ -216,6 +247,9 @@ class EventResponse(BaseModel):
     image_url: str | None
     status: PublicationStatus
     source_status: SourceStatus
+    source_type: Literal["Page", "Import", "Manual"]
+    city_id: UUID | None
+    venue_id: UUID | None
     confidence: Decimal
     issues_json: Any
     data_hash: str

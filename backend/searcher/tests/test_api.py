@@ -19,6 +19,7 @@ def validation_client():
     "params",
     [
         {"page": 0},
+        {"offset": -1},
         {"page_size": 501},
         {"page_size": 0},
         {"unexpected": "x"},
@@ -86,7 +87,17 @@ def test_openapi_has_named_get_operations_and_query_arrays(validation_client):
     similar_params = {
         item["name"]: item for item in operations["find_similar"]["parameters"]
     }
-    assert set(similar_params) == {"event_id", "page", "page_size", "min_score"}
+    assert set(similar_params) == {
+        "event_id",
+        "page",
+        "page_size",
+        "offset",
+        "min_score",
+        "city",
+        "date_from",
+        "date_to",
+        "public_only",
+    }
     assert similar_params["min_score"]["schema"]["default"] == 0.15
 
 
@@ -94,9 +105,7 @@ def test_openapi_has_named_get_operations_and_query_arrays(validation_client):
     "params",
     [
         {"q": "сказка"},
-        {"city": "Уфа"},
         {"statuses": "Published"},
-        {"date_from": "2035-01-10T00:00:00Z"},
         {"include_past": "true"},
     ],
 )

@@ -5,6 +5,7 @@ description = "GigaChat + LangGraph + Langfuse for Bashkiria events"
 requires-python = ">=3.11,<4"
 dependencies = [
     "fastapi>=0.115,<1",
+    "httpx>=0.28,<1",
     "langchain-gigachat>=0.5,<1",
     "langfuse==5.2.0",
     "langgraph>=1,<2",
@@ -18,7 +19,6 @@ dependencies = [
 [dependency-groups]
 dev = [
     "alembic>=1.20,<2",
-    "httpx>=0.28,<1",
     "sqlalchemy>=2,<3",
 ]
 

@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from dotenv import load_dotenv
-from pydantic import Field, SecretStr, field_validator
+from pydantic import AnyHttpUrl, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -22,15 +22,26 @@ class ApiConfig(BaseSettings):
         hide_input_in_errors=True,
     )
 
-    api_cors_origins: list[str] = Field(default_factory=lambda: [
-        "http://localhost:3000",
-        "http://localhost:5173",
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:5173",
-    ])
+    api_cors_origins: list[str] = Field(
+        default_factory=lambda: [
+            "http://localhost:3000",
+            "http://localhost:5173",
+            "http://127.0.0.1:3000",
+            "http://127.0.0.1:5173",
+        ]
+    )
 
 
-class Config(ApiConfig):
+class ToolsConfig(ApiConfig):
+    searcher_base_url: AnyHttpUrl = AnyHttpUrl("http://127.0.0.1:8000")
+    parser_base_url: AnyHttpUrl = AnyHttpUrl("http://127.0.0.1:5164")
+    interaction_base_url: AnyHttpUrl = AnyHttpUrl("http://127.0.0.1:5266")
+    parser_api_key: SecretStr = SecretStr("")
+    interaction_api_key: SecretStr = SecretStr("")
+    tool_http_timeout_seconds: float = Field(default=10, gt=0, le=60)
+
+
+class Config(ToolsConfig):
     gigachat_credentials: SecretStr = Field(min_length=1)
     langfuse_public_key: SecretStr = Field(min_length=1)
     langfuse_secret_key: SecretStr = Field(min_length=1)
@@ -48,7 +59,10 @@ class Config(ApiConfig):
     chat_history_turns: int = Field(default=5, ge=0, le=100)
 
     @field_validator(
-        "gigachat_credentials", "langfuse_public_key", "langfuse_secret_key", "database_url",
+        "gigachat_credentials",
+        "langfuse_public_key",
+        "langfuse_secret_key",
+        "database_url",
         mode="before",
     )
     @classmethod

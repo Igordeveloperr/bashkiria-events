@@ -19,7 +19,7 @@ from sqlalchemy.pool import NullPool
 DB_DIR = Path(__file__).resolve().parents[1]
 INI = DB_DIR / "alembic.ini"
 LEGACY = DB_DIR / "legacy" / "001_chat_history.sql"
-HEAD_REVISION = "0006_interaction_service"
+HEAD_REVISION = "0007_merge_service_heads"
 
 
 class OfflineMigrationTest(unittest.TestCase):
@@ -37,6 +37,8 @@ class OfflineMigrationTest(unittest.TestCase):
             ],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
             timeout=20,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -221,6 +223,7 @@ class MigrationTest(unittest.TestCase):
             os.environ,
             DATABASE_URL=self.base_url,
             PGOPTIONS=f"-csearch_path={self.schema}",
+            PYTHONIOENCODING="utf-8",
         )
         args = [sys.executable, "-m", "alembic", "-c", str(INI), "upgrade", "head"]
         processes = [
@@ -230,6 +233,7 @@ class MigrationTest(unittest.TestCase):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                encoding="utf-8",
             )
             for _ in range(2)
         ]

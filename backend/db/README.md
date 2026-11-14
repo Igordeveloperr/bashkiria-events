@@ -225,7 +225,9 @@ parser_venues, parser_venue_aliases и добавляет nullable city_id/venue
 ## Подписки, уведомления и обратная связь
 
 `0006_interaction_service` объединяет вершины `0005_parser_references`
-и `0004_event_search`: после неё снова используется единый `alembic upgrade head`.
+и `0004_event_search`. Ревизия `0007_merge_service_heads` объединяет её с параллельной
+пустой ревизией `0006_merge_search_and_parser`, обеспечивая единый `alembic upgrade head`.
+Само объединение не меняет таблицы или данные и сохраняет существующие ревизии.
 Новые таблицы: interaction_recipients, interaction_subscriptions,
 interaction_notifications, interaction_notification_events, interaction_feedback,
 interaction_feedback_reviews. Существующие события, исходники и индексы поиска

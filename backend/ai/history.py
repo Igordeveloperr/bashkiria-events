@@ -11,12 +11,14 @@ def sliding_window(
     """Keep the current user turn and at most N preceding complete turns.
 
     A turn starts at a user message. Taking whole turns also preserves any
-    tool-call/result pairs when the graph eventually gains tools.
+    tool-call/result pairs within the current agent turn.
     """
     if history_turns < 0:
         raise ValueError("history_turns должен быть >= 0")
-    if not messages or not isinstance(messages[-1], HumanMessage):
-        raise ValueError("Контекст должен заканчиваться сообщением пользователя")
-    starts = [i for i, message in enumerate(messages) if isinstance(message, HumanMessage)]
+    starts = [
+        i for i, message in enumerate(messages) if isinstance(message, HumanMessage)
+    ]
+    if not starts:
+        raise ValueError("Контекст должен содержать сообщение пользователя")
     start = starts[max(0, len(starts) - history_turns - 1)]
     return list(messages[start:])

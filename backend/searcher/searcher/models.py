@@ -1,4 +1,4 @@
-"""Mappings of Alembic 0003. Schema changes belong exclusively to backend/db."""
+"""Catalog mappings. Schema changes belong exclusively to backend/db."""
 
 from datetime import date, datetime, time
 from decimal import Decimal
@@ -45,6 +45,9 @@ class Event(Base):
     image_url: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text)
     source_status: Mapped[str] = mapped_column(Text)
+    source_type: Mapped[str] = mapped_column(Text, server_default="Page")
+    city_id: Mapped[UUID | None]
+    venue_id: Mapped[UUID | None]
     confidence: Mapped[Decimal] = mapped_column(Numeric(4, 3))
     issues_json: Mapped[Any] = mapped_column(JSONB)
     data_hash: Mapped[str] = mapped_column(Text)
@@ -67,6 +70,7 @@ class EventSource(Base):
     id: Mapped[UUID] = mapped_column(primary_key=True)
     identity_key: Mapped[str] = mapped_column(Text)
     source_id: Mapped[str] = mapped_column(Text)
+    source_type: Mapped[str] = mapped_column(Text, server_default="Page")
     external_id: Mapped[str] = mapped_column(Text)
     source_url: Mapped[str] = mapped_column(Text)
     data_hash: Mapped[str] = mapped_column(Text)

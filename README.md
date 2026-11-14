@@ -18,12 +18,19 @@ docker compose run --rm --build migrate
 профилем Compose. Настройки и требования к ключу API описаны в его README.
 
 Все сервисы проекта описываются в корневом [compose.yaml](compose.yaml).
-Доступны PostgreSQL, одноразовый сервис миграций Alembic, поисковый HTTP-сервис
-и парсер в отдельном профиле.
+Доступны PostgreSQL, одноразовый сервис миграций Alembic, поисковый HTTP-сервис,
+ИИ-агент и парсер в отдельном профиле.
 
 ## Запуск
 
-Из корня проекта при запущенном Docker Desktop:
+Перед первым запуском создай файл настроек агента:
+
+```powershell
+if (-not (Test-Path backend/ai/.env)) { Copy-Item backend/ai/.env.example backend/ai/.env }
+```
+
+Заполни в нём `GIGACHAT_CREDENTIALS`, `LANGFUSE_PUBLIC_KEY` и `LANGFUSE_SECRET_KEY`.
+Затем из корня проекта при запущенном Docker Desktop:
 
 ```powershell
 docker compose up -d --build
@@ -32,7 +39,7 @@ docker compose logs migrate
 ```
 
 PostgreSQL проходит healthcheck, затем `migrate` выполняет `alembic upgrade head`
-и завершается с кодом 0, после чего запускается поиск. Повторный запуск применяет только новые ревизии.
+и завершается с кодом 0, после чего запускаются поиск и агент. Повторный запуск применяет только новые ревизии.
 При ошибке `docker compose wait migrate` возвращает ненулевой код.
 
 По умолчанию база, пользователь и пароль — `bashkiria`, локальный порт — `5432`.
@@ -47,7 +54,7 @@ PostgreSQL проходит healthcheck, затем `migrate` выполняет
 POSTGRES_PORT=55432
 ```
 
-Тогда в `backend/ai/.env` укажи
+При локальном запуске агента в `backend/ai/.env` также укажи
 `DATABASE_URL=postgresql://bashkiria:bashkiria@localhost:55432/bashkiria`
 и повтори `docker compose up -d`. Внутри Docker остаётся адрес `postgres:5432`;
 пересоздание контейнера с другим внешним портом сохраняет существующий том БД.
@@ -57,18 +64,20 @@ POSTGRES_PORT=55432
 фильтры, расписание площадки и похожие события по UUID. Порт задаётся
 через `SEARCHER_HTTP_PORT`. Контракты и примеры — в [Search README](backend/searcher/README.md).
 
-AI-сервис пока запускается через CLI. В `backend/ai/.env` укажи ключи модели,
-Langfuse и локальную строку подключения (порт должен совпадать с `POSTGRES_PORT`):
-
-```dotenv
-DATABASE_URL=postgresql://bashkiria:bashkiria@localhost:5432/bashkiria
-```
+ИИ-агент запускается сервисом `agent`. Его API доступен на `http://localhost:8001`,
+порт задаётся через `AGENT_HTTP_PORT` в корневом `.env`. Если `8001` уже занят
+локальным Python-сервисом, задай `AGENT_HTTP_PORT=8002` и используй
+`http://localhost:8002` в клиенте. Затем повтори запуск Compose.
+Для запуска только агента с его зависимостями:
 
 ```powershell
-cd backend/ai
-uv sync --frozen
-uv run --frozen uvicorn api:app --host 127.0.0.1 --port 8001
+docker compose up -d --build --wait agent
 ```
+
+Настройки модели и Langfuse загружаются из `backend/ai/.env`. В контейнере
+`DATABASE_URL` переопределяется адресом `postgres:5432` и параметрами `POSTGRES_*`
+из корневого `.env`; внешний порт PostgreSQL на это подключение не влияет.
+Локальный запуск HTTP API и CLI описан в [AI README](backend/ai/README.md).
 
 Фронтенд отправляет `POST http://localhost:8001/api/chat` с JSON:
 
@@ -82,8 +91,17 @@ uv run --frozen uvicorn api:app --host 127.0.0.1 --port 8001
 
 Ответ находится в поле `reply`. История переписки сохраняется автоматически по паре
 `user_id` и `session_id`. Swagger: `http://localhost:8001/docs`.
-Контракты шести инструментов доступны через `GET /api/tools`; их выполнение пока
-не реализовано. Форматы ответа, сетевые повторы, CORS и CLI описаны
+Шесть инструментов подключены к графу агента; контракты доступны через `GET /api/tools`.
+Поиск использует `searcher`; подписки и обращения — `interactionService`,
+справочник городов — `parser`. Для всех инструментов запусти:
+
+```powershell
+docker compose --profile parser --profile interaction up -d --build --wait agent
+```
+
+Ключи парсера и Interaction API задаются в корневом `.env`. Подписка требует
+явного подтверждения в интерфейсе (`subscription_consent: true` в запросе чата).
+Форматы ответа, сетевые повторы, CORS и CLI описаны
 в [AI README](backend/ai/README.md), инструменты — в [TOOLS.md](backend/ai/TOOLS.md).
 
 ## Миграции
@@ -96,8 +114,7 @@ docker compose run --rm migrate
 docker compose run --rm migrate alembic current
 ```
 
-При контейнеризации HTTP API в этом же Compose укажи его зависимость:
-Для новых сервисов в этом же Compose укажи зависимость, как у поиска:
+Для новых сервисов в этом же Compose укажи зависимость, как у поиска и агента:
 
 ```yaml
 depends_on:
@@ -107,7 +124,4 @@ depends_on:
     condition: service_completed_successfully
 ```
 
-Так backend начнёт работу после успешной миграции. Пока Compose запускает БД и
-миграции; HTTP API запускается локально командой выше.
-Так backend начнёт работу после успешной миграции. Frontend и AI HTTP backend
-будут добавлены в этот Compose по мере появления их исполняемых сервисов.
+Так backend начнёт работу после успешной миграции.

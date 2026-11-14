@@ -71,7 +71,7 @@ class PostgresChatTest(unittest.TestCase):
         migrate(self.database_url)
         with psycopg.connect(self.database_url) as connection:
             version = connection.execute("SELECT version_num FROM alembic_version").fetchone()
-        self.assertEqual(version, ("0001_chat_history",))
+        self.assertEqual(version, ("0007_merge_service_heads",))
 
     def test_history_survives_new_service_and_window_does_not_delete_messages(self):
         for i in range(8):
@@ -236,7 +236,7 @@ class PostgresChatTest(unittest.TestCase):
         for content in ("", "   "):
             with self.subTest(content=content), self.assertRaises(ValueError):
                 self.send(content)
-        with self.assertRaises(ValueError):
+        with self.assertRaises(TypeError):
             self.send("hello", request_id="not-a-uuid")
         with self.assertRaises(ValueError):
             self.send("hello", user_id=" ")

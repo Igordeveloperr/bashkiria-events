@@ -66,6 +66,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "langchain-gigachat" },
     { name = "langfuse" },
     { name = "langgraph" },
@@ -79,13 +80,13 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "alembic" },
-    { name = "httpx" },
     { name = "sqlalchemy" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115,<1" },
+    { name = "httpx", specifier = ">=0.28,<1" },
     { name = "langchain-gigachat", specifier = ">=0.5,<1" },
     { name = "langfuse", specifier = "==5.2.0" },
     { name = "langgraph", specifier = ">=1,<2" },
@@ -99,7 +100,6 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "alembic", specifier = ">=1.20,<2" },
-    { name = "httpx", specifier = ">=0.28,<1" },
     { name = "sqlalchemy", specifier = ">=2,<3" },
 ]
 

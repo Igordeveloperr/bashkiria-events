@@ -38,7 +38,13 @@ class ChatService:
         self.callback_factory = callback_factory
 
     def send_message(
-        self, *, user_id: str, session_key: str, request_id: UUID, content: str
+        self,
+        *,
+        user_id: str,
+        session_key: str,
+        request_id: UUID,
+        content: str,
+        subscription_consent: bool = False,
     ) -> ChatReply:
         """The caller supplies user_id and the external conversation key.
 
@@ -79,7 +85,13 @@ class ChatService:
                 result = self.graph.invoke(
                     {"messages": messages},
                     config={
-                        "configurable": {"history_turns": self.history_turns},
+                        "configurable": {
+                            "history_turns": self.history_turns,
+                            "user_id": user_id,
+                            "session_id": session_key,
+                            "request_id": str(request_id),
+                            "subscription_consent": subscription_consent,
+                        },
                         "callbacks": [handler] if handler else [],
                         "run_name": "recommend-events",
                         "tags": ["bashkiria-events"],
@@ -93,8 +105,11 @@ class ChatService:
                     },
                 )
                 response = result["messages"][-1]
-                if not isinstance(response, AIMessage) or not isinstance(
-                    response.content, str
+                if (
+                    not isinstance(response, AIMessage)
+                    or not isinstance(response.content, str)
+                    or not response.content.strip()
+                    or response.tool_calls
                 ):
                     raise TypeError("Ожидался текстовый ответ модели")
                 trace_id = getattr(handler, "last_trace_id", None)

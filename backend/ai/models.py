@@ -1,6 +1,7 @@
 """Data models used by the event tools."""
 
-from datetime import date
+from datetime import date, time
+from decimal import Decimal
 from typing import Annotated, Literal, Self
 from uuid import UUID
 
@@ -19,7 +20,20 @@ Rubles = Annotated[int, Field(ge=0)]
 Limit = Annotated[int, Field(ge=1, le=100)]
 Offset = Annotated[int, Field(ge=0)]
 Age = Annotated[int, Field(ge=0, le=120)]
-EventCategory = Literal["concert", "theatre", "exhibition", "festival", "cinema", "excursion", "other"]
+EventCategory = Literal[
+    "concert",
+    "theatre",
+    "exhibition",
+    "festival",
+    "cinema",
+    "excursion",
+    "workshop",
+    "lecture",
+    "other",
+]
+Amount = Annotated[
+    Decimal, Field(ge=0, max_digits=12, decimal_places=2, allow_inf_nan=False)
+]
 
 
 class Period(BaseModel):
@@ -59,14 +73,22 @@ class EventSummary(BaseModel):
     title: Text = Field(description="Название события")
     category: EventCategory
     tags: list[str] = Field(description="Тематические метки")
-    date_start: AwareDatetime = Field(description="Начало в ISO 8601 с часовым поясом")
+    date_start: AwareDatetime | None = Field(
+        description="Начало с часовым поясом; null при неизвестном времени"
+    )
     date_end: AwareDatetime | None = Field(description="Окончание, если известно")
+    start_date: date | None = None
+    start_time: time | None = None
+    end_date: date | None = None
+    end_time: time | None = None
+    time_zone: str = "Asia/Yekaterinburg"
     city: Text
     venue: Text
-    price_min: Rubles | None = Field(description="Минимальная цена; null — неизвестна")
-    price_max: Rubles | None = Field(description="Максимальная цена; null — неизвестна")
-    is_free: bool
-    age_limit: Literal[0, 6, 12, 16, 18]
+    price_min: Amount | None = Field(description="Минимальная цена; null — неизвестна")
+    price_max: Amount | None = Field(description="Максимальная цена; null — неизвестна")
+    is_free: bool | None
+    age_limit: Literal[0, 6, 12, 16, 18] | None
+    source_status: str = "Unknown"
 
 
 class EventCard(EventSummary):
@@ -79,29 +101,41 @@ class EventCard(EventSummary):
     duration_min: Annotated[int, Field(ge=0)] | None
     language: str | None
     org_link: HttpUrl | None = Field(description="Ссылка на организатора или билеты")
-    source_url: HttpUrl = Field(description="Источник данных о событии")
+    source_url: HttpUrl | None = Field(
+        description="Публичная ссылка на источник, если есть"
+    )
     verified_at: AwareDatetime | None = Field(description="Когда проверен источник")
     status: Literal["published", "draft", "cancelled"]
 
 
 class SearchEventsResult(BaseModel):
-    events: list[EventSummary] = Field(description="Найденные события, пустой список при отсутствии совпадений")
-    total: Annotated[int, Field(ge=0)] = Field(description="Всего совпадений до пагинации")
+    events: list[EventSummary] = Field(
+        description="Найденные события, пустой список при отсутствии совпадений"
+    )
+    total: Annotated[int, Field(ge=0)] = Field(
+        description="Всего совпадений до пагинации"
+    )
     limit: Limit
     offset: Offset
 
 
 class GetEventResult(BaseModel):
-    event: EventCard | None = Field(description="Полная карточка; null, если событие не найдено")
+    event: EventCard | None = Field(
+        description="Полная карточка; null, если событие не найдено"
+    )
 
 
 class SimilarEvent(BaseModel):
     event: EventSummary
-    score: Annotated[float, Field(ge=0, le=1)] = Field(description="Степень сходства от 0 до 1")
+    score: Annotated[float, Field(ge=0, le=1)] = Field(
+        description="Степень сходства от 0 до 1"
+    )
 
 
 class FindSimilarResult(BaseModel):
-    events: list[SimilarEvent] = Field(description="События по убыванию сходства, без исходного события")
+    events: list[SimilarEvent] = Field(
+        description="События по убыванию сходства, без исходного события"
+    )
 
 
 class GetVenueScheduleResult(SearchEventsResult):
@@ -122,5 +156,7 @@ class SubscribeResult(BaseModel):
 class SaveFeedbackResult(BaseModel):
     feedback_id: UUID = Field(description="Идентификатор зарегистрированного обращения")
     event_id: UUID
-    status: Literal["submitted"] = Field(description="Обращение зарегистрировано; доставка отдельно не подтверждается")
+    status: Literal["submitted"] = Field(
+        description="Обращение зарегистрировано; доставка отдельно не подтверждается"
+    )
     created_at: AwareDatetime
