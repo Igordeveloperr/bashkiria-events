@@ -1,6 +1,6 @@
 using Bashkiria.Events.Parser.Common;
 using Bashkiria.Events.Parser.Parsing;
-using System.Text.Json;
+using System.Text.Json.Nodes;
 using Bashkiria.Events.Parser.Collection;
 using Bashkiria.Events.Parser.Configuration;
 using Bashkiria.Events.Parser.Contracts;
@@ -21,49 +21,42 @@ public static class ParserEndpoints
         var api = app.MapGroup("/api/v1/parser").AddEndpointFilter<ParserApiKeyFilter>()
             .RequireRateLimiting("parser-api").WithTags("Parser");
 
-        api.MapGet("/sources", (SourceRegistry sources) => Results.Ok(sources.Sources.Select(source =>
-            new SourceResponse(source.Id, source.Kind, source.Enabled, source.ListingUrl, source.Priority))))
-            .WithName("ListParserSources").Produces<IReadOnlyList<SourceResponse>>();
+        api.MapGet("/sources", (SourceRegistry sources) => Results.Ok(sources.Sources.Select(source => new
+        { source.Id, source.Kind, source.Enabled, source.ListingUrl, source.Priority })));
 
-        api.MapPost("/runs/{id}", async (string id, int? maxPages, SourceRegistry sources,
+        api.MapPost("/runs/{sourceId}", async (string sourceId, int? maxPages, SourceRegistry sources,
             CollectionRunStore runs, IOptions<ParserOptions> options, CancellationToken token) =>
         {
-            var source = sources.Get(id);
+            var source = sources.Get(sourceId);
             var limit = maxPages ?? options.Value.MaxPagesPerRun;
-            if (limit < 1 || limit > options.Value.MaxPagesPerRun) return Results.BadRequest(new MessageResponse("Некорректный лимит карточек."));
+            if (limit < 1 || limit > options.Value.MaxPagesPerRun) return Results.BadRequest(new { message = "Некорректный лимит карточек." });
             var run = await runs.EnqueueAsync(source.Id, limit, null, token);
             return Results.Accepted($"/api/v1/parser/runs/{run.Id}", RunDto(run));
-        }).WithName("StartCollectionRun")
-            .WithDescription("В POST параметр id — строковый ID источника (например gkz), а не UUID задания. Ставит сбор в очередь и возвращает существующее активное задание либо новое. maxPages: 1..Parser:MaxPagesPerRun; по умолчанию берётся из конфигурации. Location содержит путь получения задания.")
-            .Produces<CollectionRunResponse>(StatusCodes.Status202Accepted)
-            .Produces<MessageResponse>(StatusCodes.Status400BadRequest).Produces(StatusCodes.Status404NotFound);
+        }).Produces<CollectionRunResponse>(StatusCodes.Status202Accepted);
 
         api.MapGet("/runs", async (IDbContextFactory<ParserDbContext> contexts, CancellationToken token) =>
         {
             await using var db = await contexts.CreateDbContextAsync(token);
             var runs = await db.CollectionRuns.AsNoTracking().OrderByDescending(run => run.CreatedAt).Take(50).ToListAsync(token);
             return Results.Ok(runs.Select(RunDto));
-        }).WithName("ListCollectionRuns").WithDescription("Последние 50 заданий, новые первыми.")
-            .Produces<IReadOnlyList<CollectionRunResponse>>();
+        }).Produces<IReadOnlyList<CollectionRunResponse>>();
 
         api.MapGet("/runs/{id:guid}", async (Guid id, IDbContextFactory<ParserDbContext> contexts, CancellationToken token) =>
         {
             await using var db = await contexts.CreateDbContextAsync(token);
             var run = await db.CollectionRuns.AsNoTracking().SingleOrDefaultAsync(run => run.Id == id, token);
             return run is null ? Results.NotFound() : Results.Ok(RunDto(run));
-        }).WithName("GetCollectionRun").Produces<CollectionRunResponse>().Produces(StatusCodes.Status404NotFound);
+        }).Produces<CollectionRunResponse>();
 
         api.MapDelete("/runs/{id:guid}", async (Guid id, CollectionRunStore runs, CancellationToken token) =>
-            await runs.CancelAsync(id, token) ? Results.NoContent() : Results.Conflict(new MessageResponse("Запуск уже завершён или не существует.")))
-            .WithName("CancelCollectionRun").Produces(StatusCodes.Status204NoContent)
-            .Produces<MessageResponse>(StatusCodes.Status409Conflict);
+            await runs.CancelAsync(id, token) ? Results.NoContent() : Results.Conflict(new { message = "Запуск уже завершён или не существует." }));
 
         api.MapGet("/events", async (IDbContextFactory<ParserDbContext> contexts, int? page, int? pageSize,
             PublicationStatus? status, string? city, CancellationToken token) =>
         {
             var number = page ?? 1; var size = pageSize ?? 30;
             if (number < 1 || number > 100000 || size is < 1 or > 100 || status.HasValue && !Enum.IsDefined(status.Value))
-                return Results.BadRequest(new MessageResponse("Некорректные параметры списка."));
+                return Results.BadRequest(new { message = "Некорректные параметры списка." });
             await using var db = await contexts.CreateDbContextAsync(token);
             var query = db.Events.AsNoTracking().Where(item => !status.HasValue || item.Status == status)
                 .Where(item => city == null || item.City == city);
@@ -71,9 +64,7 @@ public static class ParserEndpoints
             var items = await query.Include(item => item.Sources).OrderBy(item => item.StartDate).ThenBy(item => item.Id)
                 .Skip((number - 1) * size).Take(size).ToListAsync(token);
             return Results.Ok(new PageResponse<EventResponse>(count, number, size, items.Select(EventDto).ToArray()));
-        }).WithName("ListParserEvents")
-            .WithDescription("Все статусы, если status не задан; city — точное совпадение. page: 1..100000 (по умолчанию 1), pageSize: 1..100 (по умолчанию 30). Сортировка: startDate, id. total учитывает фильтры до пагинации.")
-            .Produces<PageResponse<EventResponse>>().Produces<MessageResponse>(StatusCodes.Status400BadRequest);
+        }).Produces<PageResponse<EventResponse>>();
 
         api.MapGet("/events/published", async (IDbContextFactory<ParserDbContext> contexts,
             IOptions<ParserOptions> options, TimeProvider clock, int? page, int? pageSize, CancellationToken token) =>
@@ -92,43 +83,35 @@ public static class ParserEndpoints
             var items = await query.Include(item => item.Sources).OrderBy(item => item.StartDate).ThenBy(item => item.Id)
                 .Skip((number - 1) * size).Take(size).ToListAsync(token);
             return Results.Ok(new PageResponse<EventResponse>(count, number, size, items.Select(EventDto).ToArray()));
-        }).WithName("ListPublishedEvents")
-            .WithDescription("Свежие опубликованные мероприятия без отменённых и перенесённых. verifiedAt не старше Parser:FreshnessHours. Окончание ещё не наступило; без известного окончания однодневное событие исключается после начала. Локальные даты: Asia/Yekaterinburg. page: 1..100000 (по умолчанию 1), pageSize: 1..100 (по умолчанию 30). Сортировка: startDate, id. Требуется X-Parser-Key.")
-            .Produces<PageResponse<EventResponse>>();
+        }).Produces<PageResponse<EventResponse>>();
 
         api.MapGet("/events/{id:guid}", async (Guid id, IDbContextFactory<ParserDbContext> contexts, CancellationToken token) =>
         {
             await using var db = await contexts.CreateDbContextAsync(token);
             var item = await db.Events.AsNoTracking().Include(item => item.Sources).SingleOrDefaultAsync(item => item.Id == id, token);
             return item is null ? Results.NotFound() : Results.Ok(EventDto(item));
-        }).WithName("GetParserEvent").WithDescription("Карточка без фильтров публикации и свежести.")
-            .Produces<EventResponse>().Produces(StatusCodes.Status404NotFound);
+        }).Produces<EventResponse>();
 
         api.MapPatch("/events/{id:guid}/review", async (Guid id, ReviewEventRequest request, EventReviewService review, CancellationToken token) =>
         {
             await review.ReviewAsync(id, request, token);
             return Results.NoContent();
-        }).WithName("ReviewParserEvent")
-            .WithDescription("expectedVersion должен совпадать с version карточки; note — непустая строка до 2000 символов. Пропущенные опциональные поля и null сохраняют прежнее значение. При успехе версия увеличивается; при конфликте нужно повторно получить карточку.")
-            .Produces(StatusCodes.Status204NoContent).Produces(StatusCodes.Status404NotFound).Produces(StatusCodes.Status409Conflict);
+        });
 
         api.MapGet("/events/{id:guid}/audit", async (Guid id, IDbContextFactory<ParserDbContext> contexts, CancellationToken token) =>
         {
             await using var db = await contexts.CreateDbContextAsync(token);
             var entries = await db.AuditEntries.AsNoTracking().Where(item => item.EventId == id)
                 .OrderByDescending(item => item.CreatedAt).Take(100).ToListAsync(token);
-            return Results.Ok(entries.Select(entry => new EventAuditResponse(entry.Id, entry.Action, entry.Actor,
-                entry.CreatedAt, JsonSerializer.Deserialize<JsonElement>(entry.SnapshotJson))));
-        }).WithName("ListEventAuditEntries").WithDescription("Последние 100 записей, новые первыми. Для неизвестного события — пустой массив. snapshot содержит данные аудита, зависящие от action.")
-            .Produces<IReadOnlyList<EventAuditResponse>>();
+            return Results.Ok(entries.Select(entry => new { entry.Id, entry.Action, entry.Actor, entry.CreatedAt, snapshot = JsonNode.Parse(entry.SnapshotJson) }));
+        });
 
         api.MapGet("/raw-documents/{id:guid}", async (Guid id, IDbContextFactory<ParserDbContext> contexts, CancellationToken token) =>
         {
             await using var db = await contexts.CreateDbContextAsync(token);
             var document = await db.RawDocuments.AsNoTracking().SingleOrDefaultAsync(item => item.Id == id, token);
-            return document is null ? Results.NotFound() : Results.Ok(new RawDocumentResponse(document.Id,
-                document.SourceId, document.Url, document.FetchedAt, document.HttpStatus, document.Content, document.ContentHash));
-        }).WithName("GetRawDocument").Produces<RawDocumentResponse>().Produces(StatusCodes.Status404NotFound);
+            return document is null ? Results.NotFound() : Results.Ok(document);
+        });
 
         api.MapPost("/raw-documents/{id:guid}/reparse", async (Guid id, IDbContextFactory<ParserDbContext> contexts,
             SourceRegistry sources, IEventStore events, CancellationToken token) =>
@@ -136,29 +119,23 @@ public static class ParserEndpoints
             await using var db = await contexts.CreateDbContextAsync(token);
             var document = await db.RawDocuments.AsNoTracking().SingleOrDefaultAsync(item => item.Id == id, token)
                 ?? throw new KeyNotFoundException();
-            if (document.HttpStatus is < 200 or > 299) return Results.BadRequest(new MessageResponse("Нельзя разбирать неуспешный HTTP-ответ."));
+            if (document.HttpStatus is < 200 or > 299) return Results.BadRequest(new { message = "Нельзя разбирать неуспешный HTTP-ответ." });
             var source = sources.Get(document.SourceId);
             var candidates = sources.Parse(source, document.Content, document.Url);
             var results = new List<EventSaveResult>();
             foreach (var candidate in candidates)
                 results.Add(await events.SaveAsync(source, candidate, document, token));
-            return Results.Ok(new ReparseResponse(id, results.Select(result =>
-                new EventSaveResponse(result.EventId, result.Outcome, result.Status)).ToArray()));
-        }).WithName("ReparseRawDocument")
-            .WithDescription("Повторный разбор сохранённого документа без HTTP-загрузки. fetchedAt не меняется. Кандидаты сохраняются отдельными транзакциями; results может быть пустым.")
-            .Produces<ReparseResponse>().Produces<MessageResponse>(StatusCodes.Status400BadRequest).Produces(StatusCodes.Status404NotFound);
+            return Results.Ok(new { rawDocumentId = id, results });
+        });
 
         api.MapGet("/stats", async (IDbContextFactory<ParserDbContext> contexts, CancellationToken token) =>
         {
             await using var db = await contexts.CreateDbContextAsync(token);
             var documents = await db.RawDocuments.CountAsync(token);
-            var statuses = await db.Events.GroupBy(item => item.Status)
-                .Select(group => new StatusCountResponse<PublicationStatus>(group.Key, group.Count())).ToListAsync(token);
-            var runs = await db.CollectionRuns.GroupBy(item => item.Status)
-                .Select(group => new StatusCountResponse<CollectionRunStatus>(group.Key, group.Count())).ToListAsync(token);
-            return Results.Ok(new ParserStatsResponse(documents, statuses, runs));
-        }).WithName("GetParserStats").WithDescription("Счётчики без фильтра свежести. Нулевые группы отсутствуют; единого транзакционного снимка нет.")
-            .Produces<ParserStatsResponse>();
+            var statuses = await db.Events.GroupBy(item => item.Status).Select(group => new { status = group.Key, count = group.Count() }).ToListAsync(token);
+            var runs = await db.CollectionRuns.GroupBy(item => item.Status).Select(group => new { status = group.Key, count = group.Count() }).ToListAsync(token);
+            return Results.Ok(new { rawDocuments = documents, events = statuses, runs });
+        });
     }
 
     private static CollectionRunResponse RunDto(CollectionRun run) => new(

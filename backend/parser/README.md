@@ -45,11 +45,6 @@ Compose ждёт готовности PostgreSQL и успешных мигра�
 
 ## Общие правила API
 
-Межъязыковой HTTP-контракт хранится в [contracts/parser/openapi.json](../../contracts/parser/openapi.json).
-Он генерируется из моделей и метаданных приложения. Обновление и проверка
-соответствия коду описаны в [contracts/README.md](../../contracts/README.md).
-В контракт входят только `/api/v1/parser/*`; preview и служебные маршруты исключены.
-
 - Основной префикс: `/api/v1/parser`. JSON-поля имеют имена `camelCase`.
 - Для тела JSON передавай `Content-Type: application/json`.
 - Авторизация: `X-Parser-Key`, значение из `Parser:ApiKey`. В Development без
@@ -133,10 +128,9 @@ Compose ждёт готовности PostgreSQL и успешных мигра�
 `kind` — `Gkz` / `Structured`. Больший целочисленный `priority` даёт источнику
 преимущество при обновлении объединённой карточки.
 
-### POST /api/v1/parser/runs/{id}
+### POST /api/v1/parser/runs/{sourceId}
 
-Ставит сбор в очередь. В этом POST `id` — строковый ID включённого источника
-без учёта регистра, например `gkz`. В GET и DELETE по тому же шаблону `id` — UUID задания.
+Ставит сбор в очередь. `sourceId` — ID включённого источника без учёта регистра.
 
 | Query | Тип | По умолчанию | Ограничение |
 | --- | --- | --- | --- |
@@ -627,7 +621,7 @@ dotnet test backend/parser/parser.slnx
 | GET | `/health/ready` | Проверить доступность БД и таблицы очереди |
 | GET | `/openapi/v1.json` | Получить спецификацию OpenAPI |
 | GET | `/api/v1/parser/sources` | Получить список настроенных источников |
-| POST | `/api/v1/parser/runs/{id}` | Поставить сбор источника в очередь; `id` — строковый ID источника, необязательный query `maxPages` ограничивает число карточек |
+| POST | `/api/v1/parser/runs/{sourceId}` | Поставить сбор источника в очередь; необязательный query `maxPages` ограничивает число карточек |
 | GET | `/api/v1/parser/runs` | Получить последние 50 заданий сбора |
 | GET | `/api/v1/parser/runs/{id}` | Получить состояние задания и итоговый отчёт |
 | DELETE | `/api/v1/parser/runs/{id}` | Отменить активное задание, сохранив историю |

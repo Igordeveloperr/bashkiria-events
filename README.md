@@ -6,7 +6,6 @@
 - [База данных и миграции Alembic](backend/db/README.md)
 - [ИИ-сервис](backend/ai/README.md)
 - [Поисковый сервис](backend/searcher/README.md)
-- [HTTP-контракты сервисов: OpenAPI и генерация](contracts/README.md)
 
 PostgreSQL и миграции запускаются из корня:
 

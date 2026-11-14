@@ -20,7 +20,6 @@
   <ItemGroup>
     <ProjectReference Include="..\parser\parser.csproj" />
     <None Include="..\fixtures\gkz\*.html" Link="Fixtures\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="..\..\..\contracts\parser\openapi.json" Link="Contracts\parser.openapi.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>
