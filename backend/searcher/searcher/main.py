@@ -27,9 +27,10 @@ DatabaseSession = Annotated[Session, Depends(get_session)]
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
+    configured = settings or Settings()
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        app.state.settings = settings or Settings()
+        app.state.settings = configured
         engine, app.state.sessions = create_session_factory(app.state.settings)
         try:
             yield
@@ -41,6 +42,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         version="0.1.0",
         description="Полные события, поиск по фильтрам, расписания площадок и похожие мероприятия.",
         lifespan=lifespan,
+        root_path=configured.root_path,
     )
 
     @app.exception_handler(EventNotFoundError)

@@ -42,6 +42,12 @@ docker compose --profile interaction up -d --build interaction
 
 ## Границы доступа
 
+Через Gateway: `http://localhost:8080/api/v1/interaction/...`. Пути и заголовки
+сохраняются. Docker получает ключи из корневого `.env`; локальный запуск —
+из `backend/interactionService/.env`. OpenAPI через Gateway:
+`http://localhost:8080/interaction/openapi/v1.json`.
+[Полные маршруты Gateway](../gateway/README.md).
+
 Все рабочие маршруты начинаются с `/api/v1/interaction`.
 
 | Группа | Заголовки | Кто вызывает |

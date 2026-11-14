@@ -19,7 +19,7 @@ from sqlalchemy.pool import NullPool
 DB_DIR = Path(__file__).resolve().parents[1]
 INI = DB_DIR / "alembic.ini"
 LEGACY = DB_DIR / "legacy" / "001_chat_history.sql"
-HEAD_REVISION = "0006_interaction_service"
+HEAD_REVISION = "0007_merge_service_heads"
 
 
 class OfflineMigrationTest(unittest.TestCase):
