@@ -233,6 +233,9 @@ class EventResponse(BaseModel):
     duration_min: int | None
     time_zone: str = TIME_ZONE
     city: str
+    city_id: UUID | None
+    venue_id: UUID | None
+    source_type: Literal["Page", "Import", "Manual"]
     venue: str
     address: str
     latitude: Decimal | None

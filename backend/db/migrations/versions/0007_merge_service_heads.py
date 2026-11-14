@@ -1,7 +1,6 @@
-"""Join the existing parser/search merge and interaction migration heads.
+"""Unify independently merged search/parser and interaction histories.
 
-Revision ID: 0007_merge_service_heads
-Revises: 0006_merge_search_and_parser, 0006_interaction_service
+No schema changes; both already published histories remain valid.
 """
 
 revision = "0007_merge_service_heads"

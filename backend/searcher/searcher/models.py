@@ -1,4 +1,4 @@
-"""Catalog mappings. Schema changes belong exclusively to backend/db."""
+"""Read-only mappings of the catalog through Alembic 0005; migrations belong to backend/db."""
 
 from datetime import date, datetime, time
 from decimal import Decimal
@@ -31,6 +31,9 @@ class Event(Base):
     date_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     duration_min: Mapped[int | None]
     city: Mapped[str] = mapped_column(Text)
+    city_id: Mapped[UUID | None]
+    venue_id: Mapped[UUID | None]
+    source_type: Mapped[str] = mapped_column(Text, server_default="Page")
     venue: Mapped[str] = mapped_column(Text)
     address: Mapped[str] = mapped_column(Text)
     latitude: Mapped[Decimal | None] = mapped_column(Numeric(10, 7))

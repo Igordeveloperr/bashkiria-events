@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     )
 
     database_url: SecretStr | None = None
+    root_path: str = ""
     pghost: str = "localhost"
     pgport: int = Field(default=5432, ge=1, le=65535)
     pguser: str = "bashkiria"

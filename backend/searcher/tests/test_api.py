@@ -141,3 +141,14 @@ def test_database_failure_is_503_without_connection_details(validation_client):
 
 def test_invalid_event_uuid_returns_422(validation_client):
     assert validation_client.get("/events/not-a-uuid").status_code == 422
+
+
+def test_gateway_prefix_is_used_by_swagger_and_openapi():
+    app = create_app(Settings(_env_file=None, root_path="/search"))
+    with TestClient(app) as client:
+        response = client.get("/docs")
+        assert response.status_code == 200
+        assert "/search/openapi.json" in response.text
+        schema = client.get("/openapi.json").json()
+        assert {"url": "/search"} in schema["servers"]
+        assert "/events" in schema["paths"]
