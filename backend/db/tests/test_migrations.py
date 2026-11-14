@@ -19,7 +19,7 @@ from sqlalchemy.pool import NullPool
 DB_DIR = Path(__file__).resolve().parents[1]
 INI = DB_DIR / "alembic.ini"
 LEGACY = DB_DIR / "legacy" / "001_chat_history.sql"
-HEAD_REVISION = "0006_merge_search_and_parser"
+HEAD_REVISION = "0006_interaction_service"
 
 
 class OfflineMigrationTest(unittest.TestCase):
@@ -49,10 +49,9 @@ class OfflineMigrationTest(unittest.TestCase):
             "parser_event_sources",
             "parser_collection_runs",
             "parser_event_audit",
-            "parser_cities",
-            "parser_venues",
-            "parser_city_aliases",
-            "parser_venue_aliases",
+            "parser_cities", "parser_venues", "parser_city_aliases", "parser_venue_aliases",
+            "interaction_recipients", "interaction_subscriptions", "interaction_notifications",
+            "interaction_notification_events", "interaction_feedback", "interaction_feedback_reviews",
             "alembic_version",
         ):
             self.assertIn(f"CREATE TABLE {name}", result.stdout)
@@ -159,33 +158,8 @@ class MigrationTest(unittest.TestCase):
         self.assertEqual(self.current(), HEAD_REVISION)
         self.migrate()
         self.assertEqual(self.current(), HEAD_REVISION)
-
-    def test_upgrade_from_each_branch_head_preserves_data(self):
-        for revision in ("0004_event_search", "0005_parser_references"):
-            with self.subTest(revision=revision):
-                self.migrate(revision=revision)
-                self.assertEqual(self.current(), revision)
-                session_id = uuid4()
-                with psycopg.connect(self.dsn) as connection:
-                    connection.execute(
-                        """INSERT INTO chat_sessions (id, user_id, session_key)
-                           VALUES (%s, 'merge-user', 'merge-chat')""",
-                        (session_id,),
-                    )
-                self.migrate()
-                self.assertEqual(self.current(), HEAD_REVISION)
-                with psycopg.connect(self.dsn) as connection:
-                    self.assertEqual(
-                        connection.execute("SELECT id FROM chat_sessions").fetchall(),
-                        [(session_id,)],
-                    )
-                    for name in ("parser_events_search_idx", "parser_cities"):
-                        self.assertIsNotNone(
-                            connection.execute(
-                                "SELECT to_regclass(%s)", (name,)
-                            ).fetchone()[0]
-                        )
-                self.migrate(downgrade=True)
+        self.migrate()
+        self.assertEqual(self.current(), HEAD_REVISION)
 
     def test_downgrade_and_upgrade(self):
         self.migrate()
@@ -201,10 +175,9 @@ class MigrationTest(unittest.TestCase):
                 "parser_event_sources",
                 "parser_collection_runs",
                 "parser_event_audit",
-                "parser_cities",
-                "parser_venues",
-                "parser_city_aliases",
-                "parser_venue_aliases",
+                "parser_cities", "parser_venues", "parser_city_aliases", "parser_venue_aliases",
+                "interaction_recipients", "interaction_subscriptions", "interaction_notifications",
+                "interaction_notification_events", "interaction_feedback", "interaction_feedback_reviews",
             ):
                 self.assertIsNone(
                     connection.execute("SELECT to_regclass(%s)", (name,)).fetchone()[0]

@@ -62,6 +62,33 @@ services:
     networks:
       - backend
 
+  interaction:
+    profiles: ["interaction"]
+    build:
+      context: ./backend/interactionService
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_HTTP_PORTS: "8080"
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: ${POSTGRES_USER:-bashkiria}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-bashkiria}
+      PGDATABASE: ${POSTGRES_DB:-bashkiria}
+      Interaction__ApiKey: ${INTERACTION_API_KEY:-}
+      Interaction__AdminApiKey: ${INTERACTION_ADMIN_API_KEY:-}
+      Interaction__DeliveryApiKey: ${INTERACTION_DELIVERY_API_KEY:-}
+      Interaction__WorkerEnabled: ${INTERACTION_WORKER_ENABLED:-true}
+    ports:
+      - "127.0.0.1:${INTERACTION_HTTP_PORT:-5266}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    networks:
+      - backend
+
   searcher:
     build:
       context: ./backend/searcher
