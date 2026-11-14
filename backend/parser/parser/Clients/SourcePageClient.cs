@@ -14,7 +14,9 @@ public sealed class SourcePageClient(HttpClient httpClient, IRawDocumentStore do
 
         for (var redirect = 0; ; redirect++)
         {
-            using var response = await httpClient.GetAsync(pageUrl, cancellationToken);
+            using var request = new HttpRequestMessage(HttpMethod.Get, pageUrl);
+            if (!string.IsNullOrWhiteSpace(source.UserAgent)) request.Headers.UserAgent.ParseAdd(source.UserAgent);
+            using var response = await httpClient.SendAsync(request, cancellationToken);
             var content = await response.Content.ReadAsStringAsync(cancellationToken);
             var document = RawDocument.Create(source.Id, SourceUrls.Canonical(pageUrl), (int)response.StatusCode, content);
             await documents.SaveAsync(document, cancellationToken);

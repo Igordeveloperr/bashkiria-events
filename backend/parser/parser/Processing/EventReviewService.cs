@@ -6,10 +6,12 @@ using Bashkiria.Events.Parser.Data;
 using Bashkiria.Events.Parser.Models;
 using Bashkiria.Events.Parser.Parsing;
 using Microsoft.EntityFrameworkCore;
+using Bashkiria.Events.Parser.References;
 
 namespace Bashkiria.Events.Parser.Processing;
 
-public sealed class EventReviewService(IDbContextFactory<ParserDbContext> contexts, CandidateNormalizer normalizer, TimeProvider clock)
+public sealed class EventReviewService(IDbContextFactory<ParserDbContext> contexts, CandidateNormalizer normalizer, TimeProvider clock,
+    VenueResolver resolver)
 {
     public async Task ReviewAsync(Guid id, ReviewEventRequest request, CancellationToken cancellationToken)
     {
@@ -46,6 +48,8 @@ public sealed class EventReviewService(IDbContextFactory<ParserDbContext> contex
             EndDate = entity.EndDate,
             EndTime = entity.EndTime,
             City = request.City ?? entity.City,
+            CityId = request.CityId ?? (request.City is null ? entity.CityId : null),
+            VenueId = request.VenueId ?? (request.City is null && request.CityId is null && request.Venue is null && request.Address is null ? entity.VenueId : null),
             Venue = request.Venue ?? entity.Venue,
             Address = request.Address ?? entity.Address,
             Description = request.Description ?? entity.Description,
@@ -58,6 +62,7 @@ public sealed class EventReviewService(IDbContextFactory<ParserDbContext> contex
             IsFree = (request.PriceMin ?? entity.PriceMin) == 0 && (request.PriceMax ?? entity.PriceMax) == 0
                 ? true : (request.PriceMin ?? entity.PriceMin) > 0 ? false : entity.IsFree
         };
+        candidate = await resolver.ResolveAsync(db, candidate, cancellationToken);
         var normalized = normalizer.Normalize("review", candidate);
         if (request.ConfirmedSourceStatus.HasValue && !Enum.IsDefined(request.ConfirmedSourceStatus.Value) ||
             normalized.Candidate.Issues.Any(issue => issue.Code is "invalid_price" or "invalid_age" or "invalid_end" or "price_conflict"))
@@ -69,6 +74,7 @@ public sealed class EventReviewService(IDbContextFactory<ParserDbContext> contex
         entity.StartDate = candidate.StartDate; entity.StartTime = candidate.StartTime;
         entity.Title = normalized.Candidate.Title; entity.NormalizedTitle = normalized.NormalizedTitle;
         entity.City = normalized.Candidate.City ?? string.Empty; entity.Venue = normalized.Candidate.Venue ?? string.Empty;
+        entity.CityId = candidate.CityId; entity.VenueId = candidate.VenueId;
         entity.Address = normalized.Candidate.Address ?? string.Empty; entity.Description = normalized.Candidate.Description ?? string.Empty;
         entity.DateStart = normalized.StartUtc; entity.PriceMin = candidate.PriceMin; entity.PriceMax = candidate.PriceMax;
         entity.DateEnd = normalized.EndUtc;
@@ -76,7 +82,10 @@ public sealed class EventReviewService(IDbContextFactory<ParserDbContext> contex
             ? (int)(normalized.EndUtc.Value - normalized.StartUtc.Value).TotalMinutes : null;
         entity.IsFree = candidate.IsFree; entity.AgeLimit = candidate.AgeLimit; entity.SourceStatus = candidate.SourceStatus;
         entity.DedupKey = normalized.DedupKey; entity.Status = request.Status;
+        entity.IssuesJson = ParserJson.Serialize(normalized.Candidate.Issues); entity.Confidence = normalized.Confidence;
         entity.ReviewedAt = clock.GetUtcNow(); entity.ReviewNote = request.Note.Trim(); entity.UpdatedAt = clock.GetUtcNow();
+        if (entity.SourceType != EventSourceType.Page && request.Status == PublicationStatus.Published)
+            entity.VerifiedAt = entity.ReviewedAt.Value;
         entity.ManuallySuppressed = request.Status != PublicationStatus.Published;
         entity.Version++;
         await db.AuditEntries.AddAsync(new EventAuditEntry
