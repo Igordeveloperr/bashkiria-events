@@ -10,6 +10,7 @@ using Bashkiria.Events.Parser.Storage;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.Options;
+using Bashkiria.Events.Parser.References;
 
 namespace Parser.Tests;
 
@@ -22,7 +23,9 @@ public sealed class IngestionPersistenceTests : IAsyncLifetime
     private PooledDbContextFactory<ParserDbContext> Factory => new(new DbContextOptionsBuilder<ParserDbContext>()
         .UseNpgsql(Environment.GetEnvironmentVariable("PARSER_TEST_CONNECTION_STRING")).Options);
     private EventIngestionService Service => new(new EventInputReader(), new EventInputMapper(new(_clock)), new(_clock),
-        new EfRawDocumentStore(Factory), new EfEventStore(Factory, new(_clock)), Factory, Options.Create(new IngestionOptions()), _clock);
+        new EfRawDocumentStore(Factory), Store, Factory, Options.Create(new IngestionOptions()), _clock);
+    private EfEventStore Store => new(Factory, new(_clock), new VenueResolver(),
+        new ReferenceEventNormalizer(Factory, new(_clock), new VenueResolver(), _clock));
 
     [PostgresFact]
     public async Task HundredEventImportRepeatsWithoutDuplicatesAndUpdatesByExternalId()
@@ -142,7 +145,7 @@ public sealed class IngestionPersistenceTests : IAsyncLifetime
         var document = RawDocument.Create(_dataset, candidate.SourceUrl, 200, "<h1>Fixture</h1>");
         _pageDocuments.Add(document.Id);
         await new EfRawDocumentStore(Factory).SaveAsync(document, CancellationToken.None);
-        var official = await new EfEventStore(Factory, new(_clock)).SaveAsync(new(_dataset, 100), candidate, document, CancellationToken.None);
+        var official = await Store.SaveAsync(new(_dataset, 100), candidate, document, CancellationToken.None);
         var imported = await Service.ImportAsync(_dataset, ParserJson.Serialize(new[] { input with
         { Description = "Untrusted cancellation", SourceStatus = SourceEventStatus.Cancelled } }), "application/json", CancellationToken.None);
         Assert.Equal(official.EventId, imported.Items[0].EventId);
@@ -162,7 +165,7 @@ public sealed class IngestionPersistenceTests : IAsyncLifetime
         await using var db = await Factory.CreateDbContextAsync();
         var item = await db.Events.AsNoTracking().SingleAsync(item => item.Id == created.EventId);
         _clock.Now = _clock.Now.AddHours(2);
-        await new EventReviewService(Factory, new(_clock), _clock).ReviewAsync(item.Id,
+        await new EventReviewService(Factory, new(_clock), _clock, new VenueResolver()).ReviewAsync(item.Id,
             new(item.Version, PublicationStatus.Published, "Fixture moderator confirmation", Title: "Confirmed title"), CancellationToken.None);
         var raw = await db.RawDocuments.SingleAsync(item => item.Id == created.RawDocumentId);
         var replay = await Service.ReplayAsync(raw, CancellationToken.None);
@@ -176,7 +179,7 @@ public sealed class IngestionPersistenceTests : IAsyncLifetime
     private EventInput Input(int number) => new()
     {
         ExternalId = "event-" + number, Title = _dataset + "/" + number,
-        City = "Уфа", Venue = "Fixture venue", Address = "Fixture address", StartDate = new(2036, 11, 15), StartTime = new(17, 0),
+        City = "Уфа", Venue = "ГКЗ «Башкортостан»", Address = "ул. Ленина, 50", StartDate = new(2036, 11, 15), StartTime = new(17, 0),
         PriceMin = 100, PriceMax = 100, AgeLimit = 6, SourceStatus = SourceEventStatus.Scheduled
     };
 

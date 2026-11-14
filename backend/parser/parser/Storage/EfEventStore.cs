@@ -8,10 +8,12 @@ using Bashkiria.Events.Parser.Parsing;
 using Bashkiria.Events.Parser.Processing;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
+using Bashkiria.Events.Parser.References;
 
 namespace Bashkiria.Events.Parser.Storage;
 
-public sealed class EfEventStore(IDbContextFactory<ParserDbContext> contexts, CandidateNormalizer normalizer) : IEventStore
+public sealed class EfEventStore(IDbContextFactory<ParserDbContext> contexts, CandidateNormalizer normalizer,
+    VenueResolver resolver, ReferenceEventNormalizer referenceNormalizer) : IEventStore
 {
     private const int MaxAttempts = 6;
     public async Task<EventSaveResult> SaveAsync(EventWriteContext source, EventCandidate candidate, RawDocument document, CancellationToken cancellationToken)
@@ -24,7 +26,7 @@ public sealed class EfEventStore(IDbContextFactory<ParserDbContext> contexts, Ca
         {
             try
             {
-                return await SaveOnceAsync(source, normalized, document, cancellationToken);
+                return await SaveOnceAsync(source, candidate, normalized, document, cancellationToken);
             }
             catch (Exception exception) when (attempt < MaxAttempts - 1 && DatabaseErrors.IsConflict(exception))
             {
@@ -40,19 +42,25 @@ public sealed class EfEventStore(IDbContextFactory<ParserDbContext> contexts, Ca
         }
     }
 
-    private async Task<EventSaveResult> SaveOnceAsync(EventWriteContext source, NormalizedCandidate normalized,
+    private async Task<EventSaveResult> SaveOnceAsync(EventWriteContext source, EventCandidate input, NormalizedCandidate normalized,
         RawDocument document, CancellationToken cancellationToken)
     {
         await using var db = await contexts.CreateDbContextAsync(cancellationToken);
         await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
         var provenance = await db.EventSources.Include(item => item.Event)
             .SingleOrDefaultAsync(item => item.IdentityKey == normalized.IdentityKey, cancellationToken);
+        var resolved = await resolver.ResolveAsync(db, input with { RawDocumentId = document.Id }, cancellationToken);
+        var resolvedNormalized = normalizer.Normalize(source.Id, resolved);
+        // Source hashes describe the input, independently of catalog updates and moderator corrections.
+        normalized = resolvedNormalized with { DataHash = normalized.DataHash };
         if (provenance is not null && provenance.CheckedAt > document.FetchedAt)
-            return new(provenance.EventId, "unchanged", provenance.Event.Status);
+            return new(provenance.EventId, "unchanged", provenance.Event.Status,
+                ParserJson.Deserialize<List<ParsingIssue>>(provenance.Event.IssuesJson));
 
         if (provenance is not null && provenance.DataHash == normalized.DataHash)
         {
             // Preserve manual corrections and merged identities when the source itself has not changed.
+            await referenceNormalizer.ApplyAsync(db, provenance.Event, cancellationToken);
             provenance.RawDocumentId = document.Id;
             provenance.CheckedAt = document.FetchedAt;
             if (provenance.Event.DataHash == normalized.DataHash)
@@ -63,7 +71,8 @@ public sealed class EfEventStore(IDbContextFactory<ParserDbContext> contexts, Ca
             }
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
-            return new(provenance.EventId, "unchanged", provenance.Event.Status);
+            return new(provenance.EventId, "unchanged", provenance.Event.Status,
+                ParserJson.Deserialize<List<ParsingIssue>>(provenance.Event.IssuesJson));
         }
 
         var entity = provenance?.Event;
@@ -148,7 +157,8 @@ public sealed class EfEventStore(IDbContextFactory<ParserDbContext> contexts, Ca
         }
         await db.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
-        return new(entity.Id, added ? "added" : changed && canReplace ? "updated" : "unchanged", entity.Status);
+        return new(entity.Id, added ? "added" : changed && canReplace ? "updated" : "unchanged", entity.Status,
+            ParserJson.Deserialize<List<ParsingIssue>>(entity.IssuesJson));
     }
 
     private static void Apply(ParsedEvent entity, NormalizedCandidate normalized, EventWriteContext source, DateTimeOffset checkedAt)
@@ -161,6 +171,7 @@ public sealed class EfEventStore(IDbContextFactory<ParserDbContext> contexts, Ca
         entity.DurationMin = normalized.StartUtc.HasValue && normalized.EndUtc.HasValue
             ? (int)(normalized.EndUtc.Value - normalized.StartUtc.Value).TotalMinutes : null;
         entity.City = item.City ?? string.Empty; entity.Venue = item.Venue ?? string.Empty; entity.Address = item.Address ?? string.Empty;
+        entity.CityId = item.CityId; entity.VenueId = item.VenueId;
         entity.Description = item.Description ?? string.Empty; entity.Latitude = item.Latitude; entity.Longitude = item.Longitude;
         entity.PriceMin = item.PriceMin; entity.PriceMax = item.PriceMax; entity.IsFree = item.IsFree; entity.AgeLimit = item.AgeLimit;
         entity.Language = item.Language; entity.OrgLink = item.OrgLink?.AbsoluteUri; entity.ImageUrl = item.ImageUrl?.AbsoluteUri;

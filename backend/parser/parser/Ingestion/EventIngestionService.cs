@@ -31,7 +31,7 @@ public sealed partial class EventIngestionService(EventInputReader reader, Event
         if (ParserJson.Serialize(reader.ReadManual(stored.Content)) != ParserJson.Serialize(input))
             throw new IngestionRequestException(409, "Этот Idempotency-Key уже использован для другого мероприятия. Для изменения используйте модерацию с проверкой версии.");
         var saved = await events.SaveAsync(context, candidate, stored, token);
-        return new(saved.EventId, saved.Outcome, saved.Status, stored.Id, normalizer.Normalize(context.Id, candidate).Candidate.Issues);
+        return new(saved.EventId, saved.Outcome, saved.Status, stored.Id, saved.Issues ?? normalizer.Normalize(context.Id, candidate).Candidate.Issues);
     }
 
     public async Task<ImportResponse> ImportAsync(string datasetId, string text, string contentType, CancellationToken token)
@@ -57,7 +57,7 @@ public sealed partial class EventIngestionService(EventInputReader reader, Event
         var candidate = mapper.Map(input, context.Id, key.ToString("D"));
         var saved = await events.SaveAsync(context, candidate, document, token);
         return new(document.Id, null, [new(1, candidate.ExternalId, saved.EventId, saved.Outcome, saved.Status,
-            normalizer.Normalize(context.Id, candidate).Candidate.Issues, [])]);
+            saved.Issues ?? normalizer.Normalize(context.Id, candidate).Candidate.Issues, [])]);
     }
 
     private async Task<ImportResponse> SaveRowsAsync(string datasetId, IReadOnlyList<InputRow> rows, RawDocument document, CancellationToken token)
@@ -83,9 +83,16 @@ public sealed partial class EventIngestionService(EventInputReader reader, Event
                 continue;
             }
             var candidate = mapper.Map(row.Value, context.Id);
-            var saved = await events.SaveAsync(context, candidate, document, token);
-            result.Add(new(row.Row, candidate.ExternalId, saved.EventId, saved.Outcome, saved.Status,
-                normalizer.Normalize(context.Id, candidate).Candidate.Issues, []));
+            try
+            {
+                var saved = await events.SaveAsync(context, candidate, document, token);
+                result.Add(new(row.Row, candidate.ExternalId, saved.EventId, saved.Outcome, saved.Status,
+                    saved.Issues ?? normalizer.Normalize(context.Id, candidate).Candidate.Issues, []));
+            }
+            catch (ParserValidationException exception)
+            {
+                result.Add(new(row.Row, candidate.ExternalId, null, "rejected", null, [], [new("reference", "invalid_reference", exception.Message)]));
+            }
         }
         return new(document.Id, datasetId, result);
     }

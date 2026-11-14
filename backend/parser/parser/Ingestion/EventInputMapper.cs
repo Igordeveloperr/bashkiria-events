@@ -73,7 +73,7 @@ public sealed class EventInputMapper(CandidateNormalizer normalizer)
             Title = input.Title!, SourceUrl = input.SourceUrl ?? new Uri("urn:bashkiria-events:input:" + contentKey),
             StartDate = input.StartDate, StartTime = input.StartTime,
             EndDate = input.EndDate ?? (input.EndTime.HasValue ? input.StartDate : null), EndTime = input.EndTime,
-            City = input.City, Venue = input.Venue, Address = input.Address, Description = input.Description,
+            City = input.City, CityId = input.CityId, VenueId = input.VenueId, Venue = input.Venue, Address = input.Address, Description = input.Description,
             Category = input.Category, Tags = input.Tags?.Select(tag => tag.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() ?? [],
             PriceMin = input.IsFree == true ? 0 : input.PriceMin,
             PriceMax = input.IsFree == true ? 0 : input.PriceMax,

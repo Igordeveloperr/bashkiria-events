@@ -15,6 +15,8 @@ public sealed record EventInput
     public DateOnly? EndDate { get; init; }
     public TimeOnly? EndTime { get; init; }
     public string? City { get; init; }
+    public Guid? CityId { get; init; }
+    public Guid? VenueId { get; init; }
     public string? Venue { get; init; }
     public string? Address { get; init; }
     public string? Description { get; init; }

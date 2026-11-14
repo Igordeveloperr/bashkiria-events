@@ -26,6 +26,8 @@ public sealed class EventResponse
     public int? DurationMin { get; init; }
     public string TimeZone { get; init; } = "Asia/Yekaterinburg";
     public required string City { get; init; }
+    public Guid? CityId { get; init; }
+    public Guid? VenueId { get; init; }
     public required string Venue { get; init; }
     public required string Address { get; init; }
     public decimal? Latitude { get; init; }

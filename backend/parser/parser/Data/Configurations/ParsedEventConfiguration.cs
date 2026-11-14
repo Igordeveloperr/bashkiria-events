@@ -25,6 +25,10 @@ public sealed class ParsedEventConfiguration : IEntityTypeConfiguration<ParsedEv
         builder.Property(item => item.Latitude).HasPrecision(10, 7);
         builder.Property(item => item.Longitude).HasPrecision(10, 7);
         builder.Property(item => item.Version).IsConcurrencyToken();
+        builder.HasIndex(item => new { item.CityId, item.VenueId }).HasDatabaseName("parser_events_reference_idx");
+        builder.HasOne<ReferenceCity>().WithMany().HasForeignKey(item => item.CityId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne<ReferenceVenue>().WithMany().HasForeignKey(item => new { item.VenueId, item.CityId })
+            .HasPrincipalKey(item => new { item.Id, item.CityId }).OnDelete(DeleteBehavior.Restrict);
     }
 }
 

@@ -16,6 +16,8 @@ public sealed class ParsedEvent
     public DateTimeOffset? DateEnd { get; set; }
     public int? DurationMin { get; set; }
     public string City { get; set; } = string.Empty;
+    public Guid? CityId { get; set; }
+    public Guid? VenueId { get; set; }
     public string Venue { get; set; } = string.Empty;
     public string Address { get; set; } = string.Empty;
     public decimal? Latitude { get; set; }

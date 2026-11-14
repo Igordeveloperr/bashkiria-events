@@ -12,6 +12,7 @@ using Microsoft.Extensions.Options;
 using Npgsql;
 using System.Text.RegularExpressions;
 using Bashkiria.Events.Parser.Ingestion;
+using Bashkiria.Events.Parser.References;
 
 namespace Bashkiria.Events.Parser.Configuration;
 
@@ -53,6 +54,9 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IRawDocumentStore, EfRawDocumentStore>();
         services.AddSingleton<IEventStore, EfEventStore>();
         services.AddSingleton<CandidateNormalizer>();
+        services.AddSingleton<VenueResolver>();
+        services.AddSingleton<ReferenceCatalog>();
+        services.AddSingleton<ReferenceEventNormalizer>();
         services.AddSingleton<IEventParser, GkzParser>();
         services.AddSingleton<GkzListingParser>();
         services.AddSingleton<StructuredEventParser>();

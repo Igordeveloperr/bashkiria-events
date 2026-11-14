@@ -22,6 +22,7 @@ public static class ParserEndpoints
         var api = app.MapGroup("/api/v1/parser").AddEndpointFilter<ParserApiKeyFilter>()
             .RequireRateLimiting("parser-api").WithTags("Parser");
         api.MapIngestionEndpoints();
+        api.MapReferenceEndpoints();
 
         api.MapGet("/sources", (SourceRegistry sources) => Results.Ok(sources.Sources.Select(source => new
         { source.Id, source.Kind, source.Enabled, source.ListingUrl, source.Priority })));
@@ -54,14 +55,16 @@ public static class ParserEndpoints
             await runs.CancelAsync(id, token) ? Results.NoContent() : Results.Conflict(new { message = "Запуск уже завершён или не существует." }));
 
         api.MapGet("/events", async (IDbContextFactory<ParserDbContext> contexts, int? page, int? pageSize,
-            PublicationStatus? status, string? city, CancellationToken token) =>
+            PublicationStatus? status, string? city, Guid? cityId, Guid? venueId, CancellationToken token) =>
         {
             var number = page ?? 1; var size = pageSize ?? 30;
             if (number < 1 || number > 100000 || size is < 1 or > 100 || status.HasValue && !Enum.IsDefined(status.Value))
                 return Results.BadRequest(new { message = "Некорректные параметры списка." });
             await using var db = await contexts.CreateDbContextAsync(token);
             var query = db.Events.AsNoTracking().Where(item => !status.HasValue || item.Status == status)
-                .Where(item => city == null || item.City == city);
+                .Where(item => city == null || item.City == city)
+                .Where(item => !cityId.HasValue || item.CityId == cityId)
+                .Where(item => !venueId.HasValue || item.VenueId == venueId);
             var count = await query.CountAsync(token);
             var items = await query.Include(item => item.Sources).OrderBy(item => item.StartDate).ThenBy(item => item.Id)
                 .Skip((number - 1) * size).Take(size).ToListAsync(token);
@@ -78,6 +81,7 @@ public static class ParserEndpoints
             var now = clock.GetUtcNow();
             var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(clock.GetUtcNow(), CandidateNormalizer.Zone).DateTime);
             var query = db.Events.AsNoTracking().Where(item => item.Status == PublicationStatus.Published &&
+                item.CityId != null && item.VenueId != null &&
                 item.SourceStatus != SourceEventStatus.Cancelled && item.SourceStatus != SourceEventStatus.Postponed &&
                 item.VerifiedAt >= freshSince && (item.EndDate ?? item.StartDate) >= today &&
                 (item.DateEnd >= now || item.DateEnd == null && (item.EndDate > item.StartDate || item.DateStart >= now)));
@@ -160,6 +164,8 @@ public static class ParserEndpoints
         DateEnd = item.DateEnd,
         DurationMin = item.DurationMin,
         City = item.City,
+        CityId = item.CityId,
+        VenueId = item.VenueId,
         Venue = item.Venue,
         Address = item.Address,
         Latitude = item.Latitude,
