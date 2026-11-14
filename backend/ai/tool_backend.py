@@ -174,6 +174,10 @@ class ToolBackend:
             if price.max is not None:
                 params["price_to"] = price.max
         page = self._request("searcher", "GET", "/events", params=params)
+        if page is None:
+            raise ToolServiceError(
+                "invalid_service_response", "Сервис вернул некорректный ответ."
+            )
         return SearchEventsResult(
             events=[summary(item) for item in page["items"]],
             total=page["total"],
@@ -219,6 +223,10 @@ class ToolBackend:
         page = self._request(
             "searcher", "GET", f"/events/{event_id}/similar", params=params
         )
+        if page is None:
+            raise ToolServiceError(
+                "invalid_service_response", "Сервис вернул некорректный ответ."
+            )
         return FindSimilarResult(
             events=[
                 SimilarEvent(event=summary(item), score=item["score"])
@@ -236,6 +244,10 @@ class ToolBackend:
         if city is not None:
             params["city"] = city
         page = self._request("searcher", "GET", "/venues/schedule", params=params)
+        if page is None:
+            raise ToolServiceError(
+                "invalid_service_response", "Сервис вернул некорректный ответ."
+            )
         return GetVenueScheduleResult(
             venue=page["venue"],
             city=city,
@@ -270,6 +282,10 @@ class ToolBackend:
                 "/api/v1/parser/reference/cities",
                 params={"q": key, "page": page, "pageSize": 100},
             )
+            if result is None:
+                raise ToolServiceError(
+                    "invalid_service_response", "Сервис вернул некорректный ответ."
+                )
             found.extend(
                 item
                 for item in result["items"]
@@ -315,6 +331,10 @@ class ToolBackend:
                 "consentConfirmed": True,
             },
         )
+        if result is None:
+            raise ToolServiceError(
+                "invalid_service_response", "Сервис вернул некорректный ответ."
+            )
         return SubscribeResult(
             subscription_id=result["id"],
             status="active",
@@ -361,6 +381,10 @@ class ToolBackend:
                 "message": text,
             },
         )
+        if result is None:
+            raise ToolServiceError(
+                "invalid_service_response", "Сервис вернул некорректный ответ."
+            )
         return SaveFeedbackResult(
             feedback_id=result["id"],
             event_id=result["eventId"],
