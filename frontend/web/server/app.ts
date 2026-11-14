@@ -79,12 +79,13 @@ export async function createServer() {
     if (options.body !== undefined) headers['Content-Type'] = options.contentType ?? 'application/json';
     let response: Response;
     try { response = await fetch(new URL(path, config.gateway), { method: options.method ?? 'GET', headers,
-      body: options.body === undefined ? undefined : options.raw ? String(options.body) : JSON.stringify(options.body), signal: AbortSignal.timeout(30000), redirect: 'error' }); }
+      body: options.body === undefined ? undefined : options.raw ? String(options.body) : JSON.stringify(options.body), signal: AbortSignal.timeout(path.startsWith('/ai/') ? 120000 : 30000), redirect: 'error' }); }
     catch { throw new ApiError(503, 'upstream_unavailable', 'Сервис временно недоступен. Попробуйте ещё раз.'); }
     const payload = response.status === 204 ? null : await response.json().catch(() => null) as ObjectData | null;
     if (!response.ok) {
-      const title = payload && (text(payload.title) || text(payload.detail));
-      throw new ApiError(response.status, text(payload?.code) || 'request_failed', title || (response.status === 404 ? 'Запись не найдена.' : 'Не удалось выполнить действие.'), Array.isArray(payload?.errors) ? payload.errors : []);
+      const detail = payload?.detail && typeof payload.detail === 'object' ? payload.detail as ObjectData : null;
+      const title = payload && (text(payload.title) || text(payload.detail) || text(detail?.message));
+      throw new ApiError(response.status, text(payload?.code) || text(detail?.code) || 'request_failed', title || (response.status === 404 ? 'Запись не найдена.' : 'Не удалось выполнить действие.'), Array.isArray(payload?.errors) ? payload.errors : []);
     }
     return payload;
   }
@@ -101,6 +102,21 @@ export async function createServer() {
   app.get('/api/session', async (req, reply) => {
     const v = visitor(req, reply); return { csrfToken: csrf(v, secret), isAdmin: Boolean(v.adminUntil && v.adminUntil > Date.now()),
       telegram: Boolean(v.telegram), name: v.telegramName ?? null, telegramAvailable: Boolean(config.botToken) };
+  });
+  app.post('/api/chat', { config: { rateLimit: { max: 12, timeWindow: '1 minute' } } }, async (req, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    const body = z.object({ sessionId: uuid, requestId: uuid, message: z.string().trim().min(1).max(4000), subscriptionConsent: z.boolean().default(false) }).strict().parse(req.body);
+    const result = await upstream('/ai/api/chat', 'public', { method: 'POST', body: {
+      user_id: visitor(req, reply).id, session_id: body.sessionId, request_id: body.requestId,
+      message: body.message, subscription_consent: body.subscriptionConsent,
+    } }) as ObjectData;
+    return { reply: result.reply, requestId: result.request_id, traceId: result.trace_id, cached: result.cached };
+  });
+  app.put('/api/me/subscriptions/:id', async (req, reply) => {
+    const { id } = idParams.parse(req.params); const v = visitor(req, reply);
+    const body = z.object({ cityId: uuid, category: z.string().max(30).nullable().optional(), channel: z.enum(['web', 'telegram']), dateFrom: z.iso.date().nullable().optional(), dateTo: z.iso.date().nullable().optional(), consentConfirmed: z.literal(true), expectedVersion: z.number().int().positive() }).strict().parse(req.body);
+    if (body.channel === 'telegram' && !v.telegram) throw new ApiError(400, 'telegram_identity_required', 'Откройте приложение через бота.');
+    return upstream(`/api/v1/interaction/me/subscriptions/${id}`, 'user', { method: 'PUT', body, user: v });
   });
   app.post('/api/session/telegram', async (req, reply) => {
     if (!config.botToken) throw new ApiError(501, 'telegram_not_configured', 'Telegram-вход будет доступен после подключения бота.');

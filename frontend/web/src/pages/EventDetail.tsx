@@ -15,7 +15,7 @@ export function EventDetail() {
   if (event.isPending) return <div className="container"><Loading/></div>;
   if (event.isError) return <div className="container"><BackLink/><ErrorState error={event.error} retry={() => void event.refetch()}/></div>;
   const e = event.data; const saved = favorites.ids.includes(e.id);
-  const cancelled = e.status === 'cancelled' || e.sourceStatus === 'cancelled'; const postponed = e.sourceStatus === 'postponed';
+  const cancelled = e.status === 'cancelled' || e.sourceStatus === 'cancelled'; const postponed = e.sourceStatus === 'rescheduled';
   const ended = Boolean(e.dateEnd && Date.parse(e.dateEnd) < Date.now());
   const origin = e.orgLink ?? e.sources.find(s => s.url)?.url;
   async function share() {

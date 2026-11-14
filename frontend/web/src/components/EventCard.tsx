@@ -14,7 +14,7 @@ export function EventCard({ event, compact = false, external = false }: { event:
   const linkProps = external ? { target: '_blank', rel: 'noopener noreferrer' } : {};
   return <article className={`event-card ${compact ? 'compact' : ''}`}>
     <div className="event-cover"><Link {...linkProps} to={`/events/${event.id}`} aria-label={`Открыть: ${event.title}`}><EventArtwork event={event}/></Link>
-      <span className="event-category">{event.status === 'cancelled' || event.sourceStatus === 'cancelled' ? 'Отменено' : event.sourceStatus === 'postponed' ? 'Перенесено' : categorySingle[event.category] ?? 'Событие'}</span>
+      <span className="event-category">{event.status === 'cancelled' || event.sourceStatus === 'cancelled' ? 'Отменено' : event.sourceStatus === 'rescheduled' ? 'Перенесено' : categorySingle[event.category] ?? 'Событие'}</span>
       <button className={`favorite-button ${saved ? 'saved' : ''}`} onClick={() => favorites.toggle(event.id)} aria-label={saved ? `Убрать из избранного: ${event.title}` : `В избранное: ${event.title}`} aria-pressed={saved}><Heart size={19} fill={saved ? 'currentColor' : 'none'}/></button>
     </div>
     <div className="event-card-body"><div className="event-date">{eventDate(event)}</div><h3><Link {...linkProps} to={`/events/${event.id}`}>{event.title}</Link></h3>

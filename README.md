@@ -2,6 +2,8 @@
 
 Микросервисы афиши культурных мероприятий Башкортостана.
 
+Веб-сайт: http://localhost:8080, помощник: /assistant, панель модератора: /admin. Запуск вместе с сервисами: `docker compose --profile gateway up -d --build --wait`. Настройки, страницы, API браузера и подготовка Telegram Mini App описаны в [документации фронтенда](frontend/README.md). Для сайта задайте WEB_SESSION_SECRET и WEB_ADMIN_PASSWORD в корневом .env; для текущей локальной установки они уже созданы.
+
 - [Парсер: запуск, API, EF Core, источники и тесты](backend/parser/README.md)
 - [База данных и миграции Alembic](backend/db/README.md)
 - [ИИ-сервис](backend/ai/README.md)

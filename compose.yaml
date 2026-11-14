@@ -2,6 +2,40 @@
 name: bashkiria-events
 
 services:
+  web:
+    profiles: ["web", "gateway"]
+    build:
+      context: ./frontend/web
+    environment:
+      GATEWAY_URL: http://gateway:80
+      PUBLIC_ORIGIN: ${WEB_PUBLIC_ORIGIN:-http://localhost:8080}
+      APP_SESSION_SECRET: ${WEB_SESSION_SECRET:-}
+      WEB_ADMIN_PASSWORD: ${WEB_ADMIN_PASSWORD:-}
+      PARSER_API_KEY: ${PARSER_API_KEY:-}
+      INTERACTION_API_KEY: ${INTERACTION_API_KEY:-}
+      INTERACTION_ADMIN_API_KEY: ${INTERACTION_ADMIN_API_KEY:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+    ports:
+      - "127.0.0.1:${WEB_HTTP_PORT:-5173}:3000"
+    depends_on:
+      gateway:
+        condition: service_healthy
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${COMPOSE_PROJECT_NAME:-bashkiria-events}_backend
+      traefik.http.routers.web.rule: 'PathPrefix(`/`)'
+      traefik.http.routers.web.entrypoints: web
+      traefik.http.routers.web.priority: "1"
+      traefik.http.services.web.loadbalancer.server.port: "3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks:
+      - backend
+    restart: unless-stopped
+
   gateway:
     profiles: ["gateway"]
     image: traefik:v3.7

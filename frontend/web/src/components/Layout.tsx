@@ -7,7 +7,7 @@ import { api, setCsrf } from '../lib/api';
 import { telegram } from '../lib/telegram';
 import type { Session } from '../lib/types';
 
-const links = [{ to: '/', title: 'Афиша', icon: CalendarDays }, { to: '/favorites', title: 'Избранное', icon: Bookmark }, { to: '/subscriptions', title: 'Подписки', icon: Bell }];
+const links = [{ to: '/', title: 'Афиша', icon: CalendarDays }, { to: '/favorites', title: 'Избранное', icon: Bookmark }, { to: '/subscriptions', title: 'Подписки', icon: Bell }, { to: '/assistant', title: 'Помощник', icon: MessageSquare }];
 export function Layout() {
   const { data: cities = [] } = useCities(); const current = useSession(); const query = useQueryClient();
   const [params, setParams] = useSearchParams(); const location = useLocation(); const navigate = useNavigate();
@@ -38,6 +38,6 @@ export function Layout() {
     </div></header>
     <main id="main" tabIndex={-1}><Outlet/></main>
     <footer className="site-footer"><div className="footer-top"><Link className="brand small" to="/"><span className="brand-mark"><Flower2 size={24}/></span><span>башкирия<span className="brand-dot">.</span><small>события рядом</small></span></Link><div className="footer-links"><Link to="/about">О проекте</Link><Link to="/feedback">Обратная связь</Link><Link to="/embed">Виджет</Link><Link to="/admin"><ShieldCheck size={15}/>Модератору</Link></div></div><div className="footer-bottom"><p>Культура ближе, чем кажется.</p><span>Независимая афиша. Не является официальным сервисом министерства.</span></div></footer>
-    <nav className="bottom-nav" aria-label="Мобильная навигация">{[...links, { to: '/feedback', title: 'Связаться', icon: MessageSquare }].map(link => <NavLink end={link.to === '/'} to={link.to} key={link.to}><link.icon size={21}/><span>{link.title}</span></NavLink>)}</nav>
+    <nav className="bottom-nav" aria-label="Мобильная навигация">{links.map(link => <NavLink end={link.to === '/'} to={link.to} key={link.to}><link.icon size={21}/><span>{link.title}</span></NavLink>)}</nav>
   </>;
 }
