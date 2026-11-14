@@ -22,7 +22,7 @@ if (builder.Environment.IsDevelopment())
 
 builder.Services.AddParser(builder.Configuration, builder.Environment);
 builder.Services.AddHealthChecks();
-builder.Services.AddOpenApi(options => options.OpenApiVersion = Microsoft.OpenApi.OpenApiSpecVersion.OpenApi3_1);
+builder.Services.AddParserOpenApi();
 builder.Services.ConfigureHttpJsonOptions(options =>
     options.SerializerOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase)));
 builder.Services.AddRateLimiter(options =>

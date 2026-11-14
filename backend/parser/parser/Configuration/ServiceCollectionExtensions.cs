@@ -10,6 +10,7 @@ using Bashkiria.Events.Parser.Storage;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Npgsql;
+using System.Reflection;
 using System.Text.RegularExpressions;
 
 namespace Bashkiria.Events.Parser.Configuration;
@@ -18,9 +19,10 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddParser(this IServiceCollection services, IConfiguration configuration, IHostEnvironment environment)
     {
+        var exportingContract = Assembly.GetEntryAssembly()?.GetName().Name == "GetDocument.Insider";
         services.AddOptions<ParserOptions>().Bind(configuration.GetSection(ParserOptions.SectionName))
             .ValidateDataAnnotations()
-            .Validate(options => environment.IsDevelopment() || !string.IsNullOrWhiteSpace(options.ApiKey), "Parser:ApiKey is required outside Development.")
+            .Validate(options => exportingContract || environment.IsDevelopment() || !string.IsNullOrWhiteSpace(options.ApiKey), "Parser:ApiKey is required outside Development.")
             .Validate(options => options.Sources.Count is > 0 and <= 20 &&
                 options.Sources.Select(source => source.Id).Distinct(StringComparer.OrdinalIgnoreCase).Count() == options.Sources.Count, "Source IDs must be unique.")
             .Validate(ValidSources, "Sources must have valid IDs, HTTPS URLs, parser kinds and event path patterns.")
@@ -55,7 +57,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<EventReviewService>();
         services.AddTransient<SourceCollector>();
         services.AddTransient<GkzCollector>();
-        services.AddHostedService<CollectionWorker>();
+        // Build-time OpenAPI generation must not claim queue entries or access sources/the database.
+        if (!exportingContract) services.AddHostedService<CollectionWorker>();
         services.AddExceptionHandler<ParserExceptionHandler>();
         services.AddProblemDetails();
         services.AddHttpClient<SourcePageClient>(ConfigureHttpClient)
