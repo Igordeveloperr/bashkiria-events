@@ -15,6 +15,7 @@ public sealed class ParserExceptionHandler(ILogger<ParserExceptionHandler> logge
         if (exception is OperationCanceledException && context.RequestAborted.IsCancellationRequested) return false;
         var (status, title) = exception switch
         {
+            BadHttpRequestException badRequest => (badRequest.StatusCode, "Некорректный формат запроса."),
             IngestionRequestException input => (input.StatusCode, input.Message),
             EventInputValidationException input => (400, input.Message),
             DbUpdateConcurrencyException or RunLeaseLostException => (409, "Запись уже изменена. Обновите данные и повторите запрос."),
@@ -27,10 +28,9 @@ public sealed class ParserExceptionHandler(ILogger<ParserExceptionHandler> logge
             ArgumentException => (400, "Некорректные параметры запроса."),
             _ => (500, "Не удалось выполнить запрос.")
         };
-        logger.LogError(exception, "Parser request failed with status {Status}, trace {TraceId}", status, context.TraceIdentifier);
-        var extensions = new Dictionary<string, object?> { ["traceId"] = context.TraceIdentifier };
-        if (exception is EventInputValidationException validationError) extensions["errors"] = validationError.Errors;
-        await Results.Problem(statusCode: status, title: title, extensions: extensions).ExecuteAsync(context);
+        logger.Log(status >= 500 ? LogLevel.Error : LogLevel.Warning, exception,
+            "Parser request failed with status {Status}, trace {TraceId}", status, context.TraceIdentifier);
+        await ApiErrors.Problem(status, title, (exception as EventInputValidationException)?.Errors).ExecuteAsync(context);
         return true;
     }
 }

@@ -72,7 +72,8 @@ public static class ServiceCollectionExtensions
         services.AddTransient<GkzCollector>();
         services.AddHostedService<CollectionWorker>();
         services.AddExceptionHandler<ParserExceptionHandler>();
-        services.AddProblemDetails();
+        services.AddProblemDetails(options => options.CustomizeProblemDetails = context =>
+            ApiErrors.Enrich(context.HttpContext, context.ProblemDetails));
         services.AddHttpClient<SourcePageClient>(ConfigureHttpClient)
             .ConfigurePrimaryHttpMessageHandler(CreateHttpHandler);
         services.AddHttpClient<GkzClient>(ConfigureHttpClient)

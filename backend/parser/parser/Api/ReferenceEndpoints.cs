@@ -45,7 +45,7 @@ public static class ReferenceEndpoints
         {
             await using var db = await contexts.CreateDbContextAsync(token);
             var city = await db.Cities.AsNoTracking().SingleOrDefaultAsync(item => item.Id == id, token);
-            if (city is null) return Results.NotFound();
+            if (city is null) return ApiErrors.Problem(404);
             var aliases = await db.CityAliases.AsNoTracking().Where(item => item.CityId == id).OrderBy(item => item.Name)
                 .Select(item => new ReferenceAliasResponse(item.Id, item.Name, null)).ToListAsync(token);
             return Results.Ok(new CityResponse(city.Id, city.Name, aliases));
@@ -54,7 +54,7 @@ public static class ReferenceEndpoints
         {
             await using var db = await contexts.CreateDbContextAsync(token);
             var venue = await db.Venues.AsNoTracking().SingleOrDefaultAsync(item => item.Id == id, token);
-            if (venue is null) return Results.NotFound();
+            if (venue is null) return ApiErrors.Problem(404);
             var aliases = await db.VenueAliases.AsNoTracking().Where(item => item.VenueId == id).OrderBy(item => item.Name).ThenBy(item => item.Address)
                 .Select(item => new ReferenceAliasResponse(item.Id, item.Name, item.Address)).ToListAsync(token);
             return Results.Ok(new VenueResponse(venue.Id, venue.CityId, venue.Name, venue.Address, aliases));

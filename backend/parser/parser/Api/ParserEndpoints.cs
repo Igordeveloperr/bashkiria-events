@@ -32,7 +32,7 @@ public static class ParserEndpoints
         {
             var source = sources.Get(sourceId);
             var limit = maxPages ?? options.Value.MaxPagesPerRun;
-            if (limit < 1 || limit > options.Value.MaxPagesPerRun) return Results.BadRequest(new { message = "Некорректный лимит карточек." });
+            if (limit < 1 || limit > options.Value.MaxPagesPerRun) return ApiErrors.Problem(400, "Некорректный лимит карточек.");
             var run = await runs.EnqueueAsync(source.Id, limit, null, token);
             return Results.Accepted($"/api/v1/parser/runs/{run.Id}", RunDto(run));
         }).Produces<CollectionRunResponse>(StatusCodes.Status202Accepted);
@@ -48,18 +48,18 @@ public static class ParserEndpoints
         {
             await using var db = await contexts.CreateDbContextAsync(token);
             var run = await db.CollectionRuns.AsNoTracking().SingleOrDefaultAsync(run => run.Id == id, token);
-            return run is null ? Results.NotFound() : Results.Ok(RunDto(run));
+            return run is null ? ApiErrors.Problem(404) : Results.Ok(RunDto(run));
         }).Produces<CollectionRunResponse>();
 
         api.MapDelete("/runs/{id:guid}", async (Guid id, CollectionRunStore runs, CancellationToken token) =>
-            await runs.CancelAsync(id, token) ? Results.NoContent() : Results.Conflict(new { message = "Запуск уже завершён или не существует." }));
+            await runs.CancelAsync(id, token) ? Results.NoContent() : ApiErrors.Problem(409, "Запуск уже завершён или не существует."));
 
         api.MapGet("/events", async (IDbContextFactory<ParserDbContext> contexts, int? page, int? pageSize,
             PublicationStatus? status, string? city, Guid? cityId, Guid? venueId, CancellationToken token) =>
         {
             var number = page ?? 1; var size = pageSize ?? 30;
             if (number < 1 || number > 100000 || size is < 1 or > 100 || status.HasValue && !Enum.IsDefined(status.Value))
-                return Results.BadRequest(new { message = "Некорректные параметры списка." });
+                return ApiErrors.Problem(400, "Некорректные параметры списка.");
             await using var db = await contexts.CreateDbContextAsync(token);
             var query = db.Events.AsNoTracking().Where(item => !status.HasValue || item.Status == status)
                 .Where(item => city == null || item.City == city)
@@ -75,7 +75,7 @@ public static class ParserEndpoints
             IOptions<ParserOptions> options, TimeProvider clock, int? page, int? pageSize, CancellationToken token) =>
         {
             var number = page ?? 1; var size = pageSize ?? 30;
-            if (number < 1 || number > 100000 || size is < 1 or > 100) return Results.BadRequest();
+            if (number < 1 || number > 100000 || size is < 1 or > 100) return ApiErrors.Problem(400);
             await using var db = await contexts.CreateDbContextAsync(token);
             var freshSince = clock.GetUtcNow().AddHours(-options.Value.FreshnessHours);
             var now = clock.GetUtcNow();
@@ -95,7 +95,7 @@ public static class ParserEndpoints
         {
             await using var db = await contexts.CreateDbContextAsync(token);
             var item = await db.Events.AsNoTracking().Include(item => item.Sources).SingleOrDefaultAsync(item => item.Id == id, token);
-            return item is null ? Results.NotFound() : Results.Ok(EventDto(item));
+            return item is null ? ApiErrors.Problem(404) : Results.Ok(EventDto(item));
         }).Produces<EventResponse>();
 
         api.MapPatch("/events/{id:guid}/review", async (Guid id, ReviewEventRequest request, EventReviewService review, CancellationToken token) =>
@@ -116,7 +116,7 @@ public static class ParserEndpoints
         {
             await using var db = await contexts.CreateDbContextAsync(token);
             var document = await db.RawDocuments.AsNoTracking().SingleOrDefaultAsync(item => item.Id == id, token);
-            return document is null ? Results.NotFound() : Results.Ok(document);
+            return document is null ? ApiErrors.Problem(404) : Results.Ok(document);
         });
 
         api.MapPost("/raw-documents/{id:guid}/reparse", async (Guid id, IDbContextFactory<ParserDbContext> contexts,
@@ -126,7 +126,7 @@ public static class ParserEndpoints
             var document = await db.RawDocuments.AsNoTracking().SingleOrDefaultAsync(item => item.Id == id, token)
                 ?? throw new KeyNotFoundException();
             if (document.SourceType != EventSourceType.Page) return Results.Ok(await ingestion.ReplayAsync(document, token));
-            if (document.HttpStatus is < 200 or > 299) return Results.BadRequest(new { message = "Нельзя разбирать неуспешный HTTP-ответ." });
+            if (document.HttpStatus is < 200 or > 299) return ApiErrors.Problem(400, "Нельзя разбирать неуспешный HTTP-ответ.");
             var source = sources.Get(document.SourceId);
             var candidates = sources.Parse(source, document.Content, document.Url);
             var results = new List<EventSaveResult>();
