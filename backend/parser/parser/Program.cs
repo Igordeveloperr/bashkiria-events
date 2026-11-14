@@ -22,12 +22,20 @@ if (builder.Environment.IsDevelopment())
 
 builder.Services.AddParser(builder.Configuration, builder.Environment);
 builder.Services.AddHealthChecks();
+builder.Services.Configure<RouteHandlerOptions>(options => options.ThrowOnBadRequest = true);
 builder.Services.AddOpenApi(options => options.OpenApiVersion = Microsoft.OpenApi.OpenApiSpecVersion.OpenApi3_1);
 builder.Services.ConfigureHttpJsonOptions(options =>
     options.SerializerOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase)));
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.OnRejected = async (context, token) =>
+    {
+        var retryAfter = context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var delay)
+            ? Math.Max(1, (int)Math.Ceiling(delay.TotalSeconds)) : 60;
+        context.HttpContext.Response.Headers.RetryAfter = retryAfter.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await ApiErrors.Problem(429).ExecuteAsync(context.HttpContext);
+    };
     options.AddFixedWindowLimiter("parser-api", limiter =>
     {
         limiter.PermitLimit = 60;
@@ -39,6 +47,7 @@ builder.Services.AddRateLimiter(options =>
 
 var app = builder.Build();
 app.UseExceptionHandler();
+app.UseStatusCodePages(context => ApiErrors.Problem(context.HttpContext.Response.StatusCode).ExecuteAsync(context.HttpContext));
 app.UseRateLimiter();
 app.MapHealthChecks("/health");
 app.MapOpenApi();

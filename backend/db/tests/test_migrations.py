@@ -51,6 +51,7 @@ class OfflineMigrationTest(unittest.TestCase):
             "parser_event_audit",
             "alembic_version",
         ):
+        for name in ("chat_sessions", "chat_runs", "chat_messages", "parser_raw_documents", "parser_events", "parser_event_sources", "parser_collection_runs", "parser_event_audit", "parser_cities", "parser_venues", "parser_city_aliases", "parser_venue_aliases", "alembic_version"):
             self.assertIn(f"CREATE TABLE {name}", result.stdout)
         self.assertIn("CREATE EXTENSION IF NOT EXISTS pg_trgm", result.stdout)
         self.assertIn("CREATE INDEX parser_events_search_idx", result.stdout)
@@ -155,6 +156,9 @@ class MigrationTest(unittest.TestCase):
         self.assertEqual(self.current(), HEAD_REVISION)
         self.migrate()
         self.assertEqual(self.current(), HEAD_REVISION)
+        self.assertEqual(self.current(), "0005_parser_references")
+        self.migrate()
+        self.assertEqual(self.current(), "0005_parser_references")
 
     def test_downgrade_and_upgrade(self):
         self.migrate()
@@ -176,11 +180,16 @@ class MigrationTest(unittest.TestCase):
                 )
         self.migrate()
         self.assertEqual(self.current(), HEAD_REVISION)
+            for name in ("chat_sessions", "chat_runs", "chat_messages", "parser_raw_documents", "parser_events", "parser_event_sources", "parser_collection_runs", "parser_event_audit", "parser_cities", "parser_venues", "parser_city_aliases", "parser_venue_aliases"):
+                self.assertIsNone(connection.execute("SELECT to_regclass(%s)", (name,)).fetchone()[0])
+        self.migrate()
+        self.assertEqual(self.current(), "0005_parser_references")
 
     def test_legacy_adoption_preserves_messages_and_ids(self):
         self.legacy_database()
         self.migrate()
         self.assertEqual(self.current(), HEAD_REVISION)
+        self.assertEqual(self.current(), "0005_parser_references")
         self.assert_legacy_data_intact()
         self.migrate()
         self.assert_legacy_data_intact()
@@ -235,6 +244,7 @@ class MigrationTest(unittest.TestCase):
                     process.kill()
                     process.communicate()
         self.assertEqual(self.current(), HEAD_REVISION)
+        self.assertEqual(self.current(), "0005_parser_references")
 
     def test_raw_documents_preserve_history_and_validate_hash(self):
         self.migrate()
@@ -318,3 +328,44 @@ class MigrationTest(unittest.TestCase):
             )
         self.migrate()
         self.assertEqual(self.current(), HEAD_REVISION)
+        self.assertEqual(self.current(), "0005_parser_references")
+
+    def test_ingestion_upgrade_preserves_existing_page_documents(self):
+        config = Config(str(INI))
+        engine = create_engine("postgresql+psycopg://", creator=lambda: psycopg.connect(self.dsn), poolclass=NullPool)
+        try:
+            with engine.begin() as connection:
+                config.attributes["connection"] = connection
+                command.upgrade(config, "0003_parser_pipeline")
+        finally:
+            engine.dispose()
+        document_id = uuid4()
+        with psycopg.connect(self.dsn) as connection:
+            connection.execute("""INSERT INTO parser_raw_documents
+                (id, source_id, url, fetched_at, http_status, content, content_hash)
+                VALUES (%s,'gkz','https://example.org/event',now(),200,'original',%s)""",
+                (document_id, hashlib.sha256(b"original").hexdigest()))
+        self.migrate()
+        with psycopg.connect(self.dsn) as connection:
+            row = connection.execute("SELECT content,http_status,source_type,content_type FROM parser_raw_documents WHERE id=%s", (document_id,)).fetchone()
+            self.assertEqual(row, ("original", 200, "Page", "text/html"))
+
+    def test_import_origin_is_explicit_and_cannot_be_silently_downgraded(self):
+        self.migrate()
+        document_id = uuid4()
+        digest = hashlib.sha256(b"[]").hexdigest()
+        with psycopg.connect(self.dsn) as connection:
+            connection.execute("""INSERT INTO parser_raw_documents
+                (id,source_id,url,fetched_at,http_status,content,content_hash,source_type,content_type)
+                VALUES (%s,'import:fixture','urn:bashkiria-events:import:fixture',now(),NULL,'[]',%s,'Import','application/json')""",
+                (document_id, digest))
+        with self.assertRaisesRegex(Exception, "Cannot downgrade ingestion"):
+            self.migrate(downgrade=True, revision="0003_parser_pipeline")
+        self.assertEqual(self.current(), "0005_parser_references")
+        with psycopg.connect(self.dsn) as connection:
+            self.assertEqual(connection.execute("SELECT source_type,http_status FROM parser_raw_documents WHERE id=%s", (document_id,)).fetchone(), ("Import", None))
+        with self.assertRaises(psycopg.errors.CheckViolation):
+            with psycopg.connect(self.dsn) as connection:
+                connection.execute("""INSERT INTO parser_raw_documents
+                    (id,source_id,url,fetched_at,http_status,content,content_hash,source_type,content_type)
+                    VALUES (%s,'gkz','https://example.org/event',now(),NULL,'[]',%s,'Page','text/html')""", (uuid4(), digest))

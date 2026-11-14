@@ -164,14 +164,14 @@ public sealed class RawDocumentTests
             RequestDelayMilliseconds = 0,
             Sources = [new() { Id = "gkz", Kind = "Gkz", ListingUrl = GkzClient.ListingUrl.AbsoluteUri, EventPathPattern = "^/events/[^/]+/?$" }]
         });
-        var registry = new SourceRegistry(options, parser, new StructuredEventParser());
+        var registry = new SourceRegistry(options, [new GkzSourceParser(parser), new StructuredEventParser()]);
         return new GkzCollector(new SourceCollector(registry, new SourcePageClient(http, store), new MemoryEventStore(),
             new CandidateNormalizer(TimeProvider.System), options, NullLogger<SourceCollector>.Instance));
     }
 
     private sealed class MemoryEventStore : IEventStore
     {
-        public Task<EventSaveResult> SaveAsync(SourceOptions source, EventCandidate candidate, RawDocument document, CancellationToken token) =>
+        public Task<EventSaveResult> SaveAsync(EventWriteContext source, EventCandidate candidate, RawDocument document, CancellationToken token) =>
             Task.FromResult(new EventSaveResult(Guid.NewGuid(), "added", PublicationStatus.Draft));
     }
 

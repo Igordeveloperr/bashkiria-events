@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using Bashkiria.Events.Parser.Common;
 using Bashkiria.Events.Parser.Models;
 using Bashkiria.Events.Parser.Parsing;
+using Bashkiria.Events.Parser.References;
 
 namespace Bashkiria.Events.Parser.Processing;
 
@@ -71,7 +72,9 @@ public sealed class CandidateNormalizer(TimeProvider clock)
         var normalizedTitle = NormalizeText(candidate.Title);
         var dedupKey = candidate.StartDate.HasValue && candidate.StartTime.HasValue &&
             !string.IsNullOrWhiteSpace(candidate.City) && !string.IsNullOrWhiteSpace(candidate.Venue)
-            ? Hash(string.Join('|', normalizedTitle, NormalizeText(candidate.City), NormalizeVenue(candidate.Venue),
+            ? Hash(string.Join('|', normalizedTitle, ReferenceKeys.City(candidate.City),
+                candidate.VenueId?.ToString("D") ?? (string.IsNullOrWhiteSpace(candidate.Address) ? "source:" + identity :
+                    NormalizeText(candidate.Venue) + "|" + ReferenceKeys.Address(candidate.Address)),
                 candidate.StartDate.Value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
                 candidate.StartTime.Value.ToString("HH:mm:ss", CultureInfo.InvariantCulture))) : identity;
         var json = ParserJson.Serialize(candidate with { RawDocumentId = null });
@@ -86,11 +89,6 @@ public sealed class CandidateNormalizer(TimeProvider clock)
     public static string NormalizeText(string? value) => Regex.Replace(Clean(value).Normalize(NormalizationForm.FormKC)
         .ToLowerInvariant().Replace('ё', 'е'), @"[^\p{L}\p{N}]+", " ").Trim();
     private static string Clean(string? value) => Regex.Replace(value ?? string.Empty, @"\s+", " ").Trim();
-    private static string NormalizeVenue(string? value)
-    {
-        var normalized = NormalizeText(value);
-        return normalized is "гкз башкортостан" or "государственный концертный зал башкортостан" ? "гкз башкортостан" : normalized;
-    }
 }
 
 public sealed record NormalizedCandidate(EventCandidate Candidate, string IdentityKey, string DedupKey,

@@ -11,6 +11,10 @@ public sealed class ParserDbContext(DbContextOptions<ParserDbContext> options) :
     public DbSet<EventSourceRecord> EventSources => Set<EventSourceRecord>();
     public DbSet<CollectionRun> CollectionRuns => Set<CollectionRun>();
     public DbSet<EventAuditEntry> AuditEntries => Set<EventAuditEntry>();
+    public DbSet<ReferenceCity> Cities => Set<ReferenceCity>();
+    public DbSet<CityAlias> CityAliases => Set<CityAlias>();
+    public DbSet<ReferenceVenue> Venues => Set<ReferenceVenue>();
+    public DbSet<VenueAlias> VenueAliases => Set<VenueAlias>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

@@ -13,6 +13,7 @@ public sealed class ParserOptions
     [Range(1, 168)] public int FreshnessHours { get; set; } = 24;
     [Range(1, 168)] public int ScheduleIntervalHours { get; set; } = 6;
     public bool SchedulerEnabled { get; set; }
+    public bool WorkerEnabled { get; set; } = true;
     public string? ApiKey { get; set; }
     public List<SourceOptions> Sources { get; set; } = [];
 }
@@ -28,4 +29,5 @@ public sealed class SourceOptions
     public string? City { get; set; }
     public string? Venue { get; set; }
     public string? Address { get; set; }
+    public string? UserAgent { get; set; } = "BashkiriaEventsParser/1.0";
 }

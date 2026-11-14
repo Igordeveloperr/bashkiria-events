@@ -5,6 +5,7 @@ public sealed class EventSourceRecord
     public Guid Id { get; set; }
     public string IdentityKey { get; set; } = string.Empty;
     public string SourceId { get; set; } = string.Empty;
+    public EventSourceType SourceType { get; set; }
     public string ExternalId { get; set; } = string.Empty;
     public string SourceUrl { get; set; } = string.Empty;
     public Guid EventId { get; set; }
