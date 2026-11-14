@@ -60,8 +60,17 @@ def search_vector():
 
 
 def text_query(value: str):
-    return func.websearch_to_tsquery(
-        literal_column("'russian'::regconfig"), normalize(value)
+    config = literal_column("'russian'::regconfig")
+    query = func.websearch_to_tsquery(config, normalize(value))
+    # Stemming alone doesn't connect "новый год" with "новогодний".
+    # Rewrite lexemes so inflections and surrounding query operators still work.
+    new_year_terms = func.plainto_tsquery(config, "новый год")
+    new_year_word = func.plainto_tsquery(config, "новогодний")
+    new_year_phrase = func.phraseto_tsquery(config, "новый год")
+    return func.ts_rewrite(
+        func.ts_rewrite(query, new_year_terms, new_year_word),
+        new_year_word,
+        new_year_word.op("||")(new_year_phrase),
     )
 
 
@@ -79,8 +88,16 @@ def text_match(value: str):
 
 
 def text_rank(value: str):
-    return func.ts_rank_cd(search_vector(), text_query(value)) + func.similarity(
-        Event.normalized_title, normalize_title(value)
+    query = text_query(value)
+    title_vector = func.to_tsvector(
+        literal_column("'russian'::regconfig"), Event.normalized_title
+    )
+    # Title matches lead; bounded document rank prevents repeated body text
+    # from pushing an incidental mention above an event about the query.
+    return (
+        case((title_vector.bool_op("@@")(query), 2.0), else_=0.0)
+        + func.ts_rank_cd(search_vector(), query, 32)
+        + func.word_similarity(normalize_title(value), Event.normalized_title)
     )
 
 
@@ -162,7 +179,11 @@ def price_bounds():
 
 
 def filter_conditions(filters: EventFilters):
-    conditions = [Event.status.in_([status.value for status in filters.statuses])]
+    conditions = []
+    if filters.statuses:
+        conditions.append(
+            Event.status.in_([status.value for status in filters.statuses])
+        )
     if filters.q:
         conditions.append(text_match(filters.q))
     if filters.title:

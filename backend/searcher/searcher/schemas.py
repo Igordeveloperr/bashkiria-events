@@ -75,9 +75,9 @@ class EventFilters(BaseModel):
     address: SearchText | None = None
     language: SearchText | None = None
     statuses: list[PublicationStatus] = Field(
-        default_factory=lambda: [PublicationStatus.published],
-        min_length=1,
+        default_factory=list,
         max_length=3,
+        description="Статусы публикации; без параметра возвращаются все статусы",
     )
     source_statuses: list[SourceStatus] = Field(default_factory=list, max_length=6)
     date_from: AwareDatetime | None = Field(
@@ -127,9 +127,20 @@ class EventFilters(BaseModel):
 
 
 class SearchQuery(EventFilters, Pagination):
-    sort: Literal[
-        "date_asc", "date_desc", "price_asc", "price_desc", "updated_desc", "relevance"
-    ] = "date_asc"
+    sort: (
+        Literal[
+            "date_asc",
+            "date_desc",
+            "price_asc",
+            "price_desc",
+            "updated_desc",
+            "relevance",
+        ]
+        | None
+    ) = Field(
+        default=None,
+        description="По умолчанию relevance при наличии q, иначе date_asc",
+    )
 
     @model_validator(mode="after")
     def relevance_needs_query(self) -> Self:
@@ -154,11 +165,8 @@ class ScheduleQuery(Pagination):
         return self
 
 
-class SimilarQuery(EventFilters, Pagination):
+class SimilarQuery(Pagination):
     min_score: float = Field(default=0.15, ge=0, le=1, allow_inf_nan=False)
-    include_past: bool = Field(
-        default=False, description="Включать завершившиеся мероприятия"
-    )
 
 
 class SourceResponse(BaseModel):

@@ -55,16 +55,20 @@ def test_pagination_is_stable_counts_events_once_and_handles_empty_pages(
     assert pages[3]["total"] == 5
 
 
-def test_default_status_and_explicit_statuses(client, event_factory):
+@pytest.mark.parametrize("params", [{}, {"q": "джаз"}, {"city": "Уфа"}])
+def test_search_only_filters_status_when_requested(client, event_factory, params):
     published = event_factory()
     draft = event_factory(status="Draft")
     cancelled = event_factory(status="Cancelled")
-    assert ids(client.get("/events")) == [published]
+    response = client.get("/events", params=params)
+    assert set(ids(response)) == {published, draft, cancelled}
+    assert response.json()["total"] == 3
+    assert ids(client.get("/events", params={**params, "statuses": "Published"})) == [
+        published
+    ]
     assert set(
         ids(
-            client.get(
-                "/events", params=[("statuses", "Draft"), ("statuses", "Cancelled")]
-            )
+            client.get("/events", params={**params, "statuses": ["Draft", "Cancelled"]})
         )
     ) == {draft, cancelled}
 
@@ -81,6 +85,49 @@ def test_text_stemming_substrings_typos_and_yo(client, event_factory):
     assert ids(client.get("/events", params={"q": "ёлка", "sort": "relevance"})) == [
         tree
     ]
+
+
+@pytest.mark.parametrize("query", ["новый год", "НОВОГО ГОДА", "новогодние"])
+def test_search_matches_new_year_phrase_and_adjective(client, event_factory, query):
+    tale = event_factory(
+        title="Новогодняя сказка «Дед Мороз и школа богатырей»",
+        description="Семейное представление с волшебниками.",
+        status="Draft",
+    )
+    holiday = event_factory(
+        title="Встречаем Новый год", description="Праздник для всей семьи."
+    )
+    event_factory(
+        title="Концерт классической музыки",
+        description="За этот год артисты подготовили новые произведения.",
+    )
+
+    assert set(ids(client.get("/events", params={"q": query}))) == {tale, holiday}
+
+
+def test_text_search_prioritizes_titles_by_default_and_honors_date_sort(
+    client, event_factory
+):
+    description_match = event_factory(
+        title="Выступление артистов", description="Музыка. " * 100
+    )
+    title_match = event_factory(
+        title="Музыка кино",
+        description="Программа с оркестром.",
+        start=START + timedelta(days=1),
+        end=START + timedelta(days=1, hours=2),
+    )
+
+    for params in ({"q": "музыка"}, {"q": "музыка", "sort": "relevance"}):
+        assert ids(client.get("/events", params=params)) == [
+            title_match,
+            description_match,
+        ]
+    assert ids(client.get("/events", params={"q": "музыка", "sort": "date_asc"})) == [
+        description_match,
+        title_match,
+    ]
+    assert ids(client.get("/events")) == [description_match, title_match]
 
 
 def test_filters_combine_and_sources_do_not_duplicate(client, event_factory):
@@ -304,7 +351,49 @@ def test_empty_schedule(client):
     assert response.json()["total"] == response.json()["pages"] == 0
 
 
-def test_similar_ranks_features_excludes_reference_unrelated_past_and_unpublished(
+def test_similar_finds_draft_sessions_without_tags_category_or_end_time(
+    client, event_factory
+):
+    fields = dict(
+        title="Новогодняя сказка «Дед Мороз и школа богатырей»",
+        description="Дед Мороз и юные богатыри спасают Новый год.",
+        category="Other",
+        tags=[],
+        status="Draft",
+        price_min=None,
+        price_max=None,
+        is_free=None,
+        age_limit=0,
+    )
+    reference = event_factory(start=START.replace(hour=14), end=None, **fields)
+    other_session = event_factory(
+        start=START.replace(hour=16, minute=30), end=None, **fields
+    )
+
+    response = client.get(f"/events/{reference}/similar")
+
+    assert ids(response) == [other_session]
+    assert response.json()["total"] == 1
+    assert response.json()["items"][0]["status"] == "Draft"
+    assert response.json()["items"][0]["score"] == pytest.approx(0.6)
+
+
+@pytest.mark.parametrize("reference_status", ["Draft", "Published", "Cancelled"])
+def test_similar_includes_all_publication_statuses(
+    client, event_factory, reference_status
+):
+    reference = event_factory(status=reference_status)
+    published = event_factory()
+    draft = event_factory(status="Draft")
+    cancelled = event_factory(status="Cancelled")
+    path = f"/events/{reference}/similar"
+
+    response = client.get(path)
+    assert ids(response) == sorted([published, draft, cancelled])
+    assert response.json()["total"] == 3
+
+
+def test_similar_ranks_features_includes_past_and_undated_excludes_reference_and_unrelated(
     client, event_factory
 ):
     reference = event_factory()
@@ -318,33 +407,55 @@ def test_similar_ranks_features_excludes_reference_unrelated_past_and_unpublishe
         tags=["дети"],
         description="Поездка в зоопарк",
     )
-    event_factory(status="Draft")
-    event_factory(status="Cancelled")
     past = datetime.now(UTC) - timedelta(days=2)
     past_id = event_factory(start=past, end=past + timedelta(hours=2))
+    undated = event_factory(start=None, end=None, status="Draft")
     response = client.get(f"/events/{reference}/similar")
-    assert ids(response) == [closest, related]
+    assert ids(response) == [past_id, closest, undated, related]
     payload = response.json()
     assert payload["reference_event_id"] == reference
     assert payload["items"][0]["score"] == pytest.approx(1.0)
-    assert payload["items"][0]["score"] > payload["items"][1]["score"] > 0
+    assert payload["items"][0]["score"] > payload["items"][-1]["score"] > 0
     assert payload["items"][0]["sources"]
-    assert past_id in ids(
-        client.get(f"/events/{reference}/similar", params={"include_past": "true"})
-    )
 
 
-def test_similar_supports_filters_threshold_and_pagination(client, event_factory):
+def test_similar_pagination_includes_other_cities(client, event_factory):
     reference = event_factory()
     first, second = sorted([event_factory(), event_factory()])
-    event_factory(city="Москва")
+    other_city = event_factory(city="Москва")
     path = f"/events/{reference}/similar"
-    params = dict(city="Уфа", page_size=1, min_score="0.99")
+    params = dict(page_size=1)
     response = client.get(path, params=params)
     assert ids(response) == [first]
-    assert response.json()["total"] == 2
+    assert response.json()["total"] == 3
     assert ids(client.get(path, params={**params, "page": 2})) == [second]
-    assert client.get(path, params={"min_score": 2}).status_code == 422
+    assert ids(client.get(path, params={**params, "page": 3})) == [other_city]
+
+    filtered_params = {**params, "min_score": 1}
+    filtered = client.get(path, params=filtered_params)
+    assert ids(filtered) == [first]
+    assert filtered.json()["total"] == filtered.json()["pages"] == 2
+    assert ids(client.get(path, params={**filtered_params, "page": 2})) == [second]
+    assert ids(client.get(path, params={**filtered_params, "page": 3})) == []
+
+
+def test_similar_min_score_can_include_weak_matches(client, event_factory):
+    reference = event_factory(
+        title="Джазовый концерт", description="", category="Other", tags=[]
+    )
+    related = event_factory(
+        title="Джазовый фестиваль под открытым небом",
+        description="",
+        category="Other",
+        tags=[],
+        city="Москва",
+    )
+
+    path = f"/events/{reference}/similar"
+    assert ids(client.get(path)) == []
+    response = client.get(path, params={"min_score": 0})
+    assert ids(response) == [related]
+    assert 0 < response.json()["items"][0]["score"] < 0.15
 
 
 def test_missing_similarity_features_do_not_match_on_empty_values(

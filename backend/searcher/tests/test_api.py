@@ -83,6 +83,37 @@ def test_openapi_has_named_get_operations_and_query_arrays(validation_client):
     params = {item["name"]: item for item in operations["search_events"]["parameters"]}
     assert params["tags"]["in"] == "query"
     assert params["tags"]["schema"]["type"] == "array"
+    similar_params = {
+        item["name"]: item for item in operations["find_similar"]["parameters"]
+    }
+    assert set(similar_params) == {"event_id", "page", "page_size", "min_score"}
+    assert similar_params["min_score"]["schema"]["default"] == 0.15
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"q": "сказка"},
+        {"city": "Уфа"},
+        {"statuses": "Published"},
+        {"date_from": "2035-01-10T00:00:00Z"},
+        {"include_past": "true"},
+    ],
+)
+def test_similar_does_not_accept_search_filters(validation_client, params):
+    response = validation_client.get(
+        "/events/ec0e76ba-9244-46ae-ab4b-fdbb8b3e1020/similar", params=params
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize("min_score", [-0.01, 1.01, "NaN", "Infinity", "-Infinity"])
+def test_similar_rejects_invalid_min_score(validation_client, min_score):
+    response = validation_client.get(
+        "/events/ec0e76ba-9244-46ae-ab4b-fdbb8b3e1020/similar",
+        params={"min_score": min_score},
+    )
+    assert response.status_code == 422
 
 
 def test_database_failure_is_503_without_connection_details(validation_client):

@@ -1,4 +1,3 @@
-from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -68,10 +67,11 @@ class EventSearchService:
             ),
             "updated_desc": (Event.updated_at.desc(),),
         }
+        sort = query.sort or ("relevance" if query.q else "date_asc")
         order = (
             (text_rank(query.q).desc(), *date_order)
-            if query.sort == "relevance"
-            else sorts[query.sort]
+            if sort == "relevance"
+            else sorts[sort]
         )
         return self._page(statement.order_by(*order, Event.id), query)
 
@@ -111,17 +111,9 @@ class EventSearchService:
         if reference is None:
             raise EventNotFoundError(str(event_id))
         score, candidate = similarity(reference)
-        conditions = [
-            *filter_conditions(query),
-            Event.id != event_id,
-            candidate,
-            score >= query.min_score,
-        ]
-        if not query.include_past:
-            conditions.extend(period_conditions(date_from=datetime.now(UTC)))
         statement = (
             select(Event, score.label("score"))
-            .where(*conditions)
+            .where(Event.id != event_id, candidate, score >= query.min_score)
             .order_by(
                 score.desc(),
                 Event.start_date.asc().nulls_last(),
