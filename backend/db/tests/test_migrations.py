@@ -92,7 +92,7 @@ class MigrationTest(unittest.TestCase):
                 if downgrade:
                     command.downgrade(config, revision or "base")
                 else:
-                    command.upgrade(config, "head")
+                    command.upgrade(config, revision or "head")
         finally:
             engine.dispose()
 
