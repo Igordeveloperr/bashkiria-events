@@ -35,11 +35,11 @@ ErrorCode = Literal[
 class ChatRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    user_id: Identity = Field(description="ID пользователя с фронтенда")
+    user_id: Identity = Field(description="ID пользователя с фронтенда", examples=["fastapi"])
     session_id: Identity = Field(
-        description="ID диалога с фронтенда, уникальный у пользователя"
+        description="ID диалога с фронтенда, уникальный у пользователя", examples=["1"]
     )
-    message: MessageText = Field(description="Текст сообщения пользователя")
+    message: MessageText = Field(description="Текст сообщения пользователя", examples=["какие концерты запланированы в Уфе в ноябре?"])
     subscription_consent: StrictBool = Field(
         default=False, description="Явное согласие на подписку, полученное интерфейсом"
     )
