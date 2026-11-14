@@ -180,6 +180,10 @@ def price_bounds():
 
 def filter_conditions(filters: EventFilters):
     conditions = []
+    if filters.public_only:
+        conditions.extend(
+            (Event.status == "Published", Event.manually_suppressed.is_(False))
+        )
     if filters.statuses:
         conditions.append(
             Event.status.in_([status.value for status in filters.statuses])

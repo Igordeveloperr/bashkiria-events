@@ -48,6 +48,9 @@ class Event(Base):
     image_url: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text)
     source_status: Mapped[str] = mapped_column(Text)
+    source_type: Mapped[str] = mapped_column(Text, server_default="Page")
+    city_id: Mapped[UUID | None]
+    venue_id: Mapped[UUID | None]
     confidence: Mapped[Decimal] = mapped_column(Numeric(4, 3))
     issues_json: Mapped[Any] = mapped_column(JSONB)
     data_hash: Mapped[str] = mapped_column(Text)

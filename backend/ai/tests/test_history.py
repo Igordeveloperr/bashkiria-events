@@ -2,9 +2,8 @@
 
 import unittest
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
-
 from history import sliding_window
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from main import build_graph
 from prompts import SYSTEM_PROMPT
 
@@ -26,6 +25,10 @@ class RecordingModel:
             usage_metadata={"input_tokens": 10, "output_tokens": 3, "total_tokens": 13},
         )
 
+    def bind_tools(self, tools):
+        self.tools = tools
+        return self
+
 
 class HistoryTest(unittest.TestCase):
     def test_window_at_model_boundary_preserves_original_state(self):
@@ -38,9 +41,9 @@ class HistoryTest(unittest.TestCase):
         result = graph.invoke(
             {"messages": messages}, {"configurable": {"history_turns": 2}}
         )
+        self.assertTrue(model.calls[0][0].content.startswith(SYSTEM_PROMPT))
         self.assertEqual(
-            [m.content for m in model.calls[0]],
-            [SYSTEM_PROMPT, "u6", "a6", "u7", "a7", "current"],
+            [m.content for m in model.calls[0][1:]], ["u6", "a6", "u7", "a7", "current"]
         )
         self.assertIsInstance(model.calls[0][0], SystemMessage)
         self.assertEqual(len(result["messages"]), 18)
@@ -53,16 +56,26 @@ class HistoryTest(unittest.TestCase):
 
     def test_turn_boundary_keeps_tool_exchange_together(self):
         messages = [
-            HumanMessage(content="old"), AIMessage(content="old answer"),
+            HumanMessage(content="old"),
+            AIMessage(content="old answer"),
             HumanMessage(content="find events"),
-            AIMessage(content="", tool_calls=[{"name": "search", "args": {}, "id": "call-1"}]),
+            AIMessage(
+                content="", tool_calls=[{"name": "search", "args": {}, "id": "call-1"}]
+            ),
             ToolMessage(content="events", tool_call_id="call-1"),
-            AIMessage(content="recommendation"), HumanMessage(content="which is free?"),
+            AIMessage(content="recommendation"),
+            HumanMessage(content="which is free?"),
         ]
         self.assertEqual(sliding_window(messages, 1), messages[2:])
 
     def test_invalid_window_or_missing_current_message(self):
-        for messages, turns in (([], 1), ([AIMessage(content="a")], 1),
-                                ([HumanMessage(content="u")], -1)):
-            with self.subTest(messages=messages, turns=turns), self.assertRaises(ValueError):
+        for messages, turns in (
+            ([], 1),
+            ([AIMessage(content="a")], 1),
+            ([HumanMessage(content="u")], -1),
+        ):
+            with (
+                self.subTest(messages=messages, turns=turns),
+                self.assertRaises(ValueError),
+            ):
                 sliding_window(messages, turns)

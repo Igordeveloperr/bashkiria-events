@@ -351,6 +351,57 @@ def test_empty_schedule(client):
     assert response.json()["total"] == response.json()["pages"] == 0
 
 
+def test_agent_offset_and_public_filter_keep_totals_and_hide_suppressed_events(
+    client, event_factory
+):
+    expected = sorted(event_factory() for _ in range(5))
+    event_factory(status="Draft")
+    event_factory(manually_suppressed=True)
+    result = client.get(
+        "/events", params={"public_only": True, "page_size": 2, "offset": 1}
+    )
+    assert ids(result) == expected[1:3]
+    assert result.json()["total"] == 5
+    assert result.json()["has_next"] is True
+    assert result.json()["has_previous"] is True
+    schedule = client.get(
+        "/venues/schedule",
+        params={
+            "venue": "ГКЗ Башкортостан",
+            "date_from": START.isoformat(),
+            "date_to": (START + timedelta(days=1)).isoformat(),
+            "offset": 3,
+            "page_size": 2,
+        },
+    )
+    assert ids(schedule) == expected[3:]
+    assert schedule.json()["total"] == 5
+    assert schedule.json()["has_next"] is False
+
+
+def test_similar_applies_agent_city_period_and_public_filter_before_limit(
+    client, event_factory
+):
+    reference = event_factory()
+    expected = event_factory()
+    event_factory(start=START - timedelta(days=2), end=START - timedelta(days=1))
+    event_factory(city="Салават")
+    event_factory(status="Draft")
+    event_factory(manually_suppressed=True)
+    result = client.get(
+        f"/events/{reference}/similar",
+        params={
+            "public_only": True,
+            "city": "уфа",
+            "date_from": START.isoformat(),
+            "date_to": (START + timedelta(days=1)).isoformat(),
+            "page_size": 1,
+        },
+    )
+    assert ids(result) == [expected]
+    assert result.json()["total"] == 1
+
+
 def test_similar_finds_draft_sessions_without_tags_category_or_end_time(
     client, event_factory
 ):
