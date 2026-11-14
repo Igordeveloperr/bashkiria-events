@@ -19,7 +19,7 @@ from sqlalchemy.pool import NullPool
 DB_DIR = Path(__file__).resolve().parents[1]
 INI = DB_DIR / "alembic.ini"
 LEGACY = DB_DIR / "legacy" / "001_chat_history.sql"
-HEAD_REVISION = "0004_event_search"
+HEAD_REVISION = "0006_merge_search_and_parser"
 
 
 class OfflineMigrationTest(unittest.TestCase):
@@ -40,7 +40,6 @@ class OfflineMigrationTest(unittest.TestCase):
             timeout=20,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-<<<<<<< HEAD
         for name in (
             "chat_sessions",
             "chat_runs",
@@ -50,11 +49,12 @@ class OfflineMigrationTest(unittest.TestCase):
             "parser_event_sources",
             "parser_collection_runs",
             "parser_event_audit",
+            "parser_cities",
+            "parser_venues",
+            "parser_city_aliases",
+            "parser_venue_aliases",
             "alembic_version",
         ):
-=======
-        for name in ("chat_sessions", "chat_runs", "chat_messages", "parser_raw_documents", "parser_events", "parser_event_sources", "parser_collection_runs", "parser_event_audit", "parser_cities", "parser_venues", "parser_city_aliases", "parser_venue_aliases", "alembic_version"):
->>>>>>> origin/main
             self.assertIn(f"CREATE TABLE {name}", result.stdout)
         self.assertIn("CREATE EXTENSION IF NOT EXISTS pg_trgm", result.stdout)
         self.assertIn("CREATE INDEX parser_events_search_idx", result.stdout)
@@ -93,7 +93,7 @@ class MigrationTest(unittest.TestCase):
                 if downgrade:
                     command.downgrade(config, revision or "base")
                 else:
-                    command.upgrade(config, "head")
+                    command.upgrade(config, revision or "head")
         finally:
             engine.dispose()
 
@@ -156,22 +156,42 @@ class MigrationTest(unittest.TestCase):
 
     def test_fresh_upgrade_and_repeat(self):
         self.migrate()
-<<<<<<< HEAD
         self.assertEqual(self.current(), HEAD_REVISION)
         self.migrate()
         self.assertEqual(self.current(), HEAD_REVISION)
-=======
-        self.assertEqual(self.current(), "0005_parser_references")
-        self.migrate()
-        self.assertEqual(self.current(), "0005_parser_references")
->>>>>>> origin/main
+
+    def test_upgrade_from_each_branch_head_preserves_data(self):
+        for revision in ("0004_event_search", "0005_parser_references"):
+            with self.subTest(revision=revision):
+                self.migrate(revision=revision)
+                self.assertEqual(self.current(), revision)
+                session_id = uuid4()
+                with psycopg.connect(self.dsn) as connection:
+                    connection.execute(
+                        """INSERT INTO chat_sessions (id, user_id, session_key)
+                           VALUES (%s, 'merge-user', 'merge-chat')""",
+                        (session_id,),
+                    )
+                self.migrate()
+                self.assertEqual(self.current(), HEAD_REVISION)
+                with psycopg.connect(self.dsn) as connection:
+                    self.assertEqual(
+                        connection.execute("SELECT id FROM chat_sessions").fetchall(),
+                        [(session_id,)],
+                    )
+                    for name in ("parser_events_search_idx", "parser_cities"):
+                        self.assertIsNotNone(
+                            connection.execute(
+                                "SELECT to_regclass(%s)", (name,)
+                            ).fetchone()[0]
+                        )
+                self.migrate(downgrade=True)
 
     def test_downgrade_and_upgrade(self):
         self.migrate()
         self.migrate(downgrade=True)
         self.assertIsNone(self.current())
         with psycopg.connect(self.dsn) as connection:
-<<<<<<< HEAD
             for name in (
                 "chat_sessions",
                 "chat_runs",
@@ -181,27 +201,21 @@ class MigrationTest(unittest.TestCase):
                 "parser_event_sources",
                 "parser_collection_runs",
                 "parser_event_audit",
+                "parser_cities",
+                "parser_venues",
+                "parser_city_aliases",
+                "parser_venue_aliases",
             ):
                 self.assertIsNone(
                     connection.execute("SELECT to_regclass(%s)", (name,)).fetchone()[0]
                 )
         self.migrate()
         self.assertEqual(self.current(), HEAD_REVISION)
-=======
-            for name in ("chat_sessions", "chat_runs", "chat_messages", "parser_raw_documents", "parser_events", "parser_event_sources", "parser_collection_runs", "parser_event_audit", "parser_cities", "parser_venues", "parser_city_aliases", "parser_venue_aliases"):
-                self.assertIsNone(connection.execute("SELECT to_regclass(%s)", (name,)).fetchone()[0])
-        self.migrate()
-        self.assertEqual(self.current(), "0005_parser_references")
->>>>>>> origin/main
 
     def test_legacy_adoption_preserves_messages_and_ids(self):
         self.legacy_database()
         self.migrate()
-<<<<<<< HEAD
         self.assertEqual(self.current(), HEAD_REVISION)
-=======
-        self.assertEqual(self.current(), "0005_parser_references")
->>>>>>> origin/main
         self.assert_legacy_data_intact()
         self.migrate()
         self.assert_legacy_data_intact()
@@ -255,11 +269,7 @@ class MigrationTest(unittest.TestCase):
                 if process.poll() is None:
                     process.kill()
                     process.communicate()
-<<<<<<< HEAD
         self.assertEqual(self.current(), HEAD_REVISION)
-=======
-        self.assertEqual(self.current(), "0005_parser_references")
->>>>>>> origin/main
 
     def test_raw_documents_preserve_history_and_validate_hash(self):
         self.migrate()
@@ -297,7 +307,6 @@ class MigrationTest(unittest.TestCase):
                 ).fetchone()[0]
             )
         self.migrate()
-<<<<<<< HEAD
         self.assertEqual(self.current(), HEAD_REVISION)
 
     def test_search_indexes_and_downgrade_preserve_events(self):
@@ -344,8 +353,6 @@ class MigrationTest(unittest.TestCase):
             )
         self.migrate()
         self.assertEqual(self.current(), HEAD_REVISION)
-=======
-        self.assertEqual(self.current(), "0005_parser_references")
 
     def test_ingestion_upgrade_preserves_existing_page_documents(self):
         config = Config(str(INI))
@@ -378,7 +385,7 @@ class MigrationTest(unittest.TestCase):
                 (document_id, digest))
         with self.assertRaisesRegex(Exception, "Cannot downgrade ingestion"):
             self.migrate(downgrade=True, revision="0003_parser_pipeline")
-        self.assertEqual(self.current(), "0005_parser_references")
+        self.assertEqual(self.current(), HEAD_REVISION)
         with psycopg.connect(self.dsn) as connection:
             self.assertEqual(connection.execute("SELECT source_type,http_status FROM parser_raw_documents WHERE id=%s", (document_id,)).fetchone(), ("Import", None))
         with self.assertRaises(psycopg.errors.CheckViolation):
@@ -386,4 +393,3 @@ class MigrationTest(unittest.TestCase):
                 connection.execute("""INSERT INTO parser_raw_documents
                     (id,source_id,url,fetched_at,http_status,content,content_hash,source_type,content_type)
                     VALUES (%s,'gkz','https://example.org/event',now(),NULL,'[]',%s,'Page','text/html')""", (uuid4(), digest))
->>>>>>> origin/main
