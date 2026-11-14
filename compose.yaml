@@ -2,6 +2,40 @@
 name: bashkiria-events
 
 services:
+  gateway:
+    profiles: ["gateway"]
+    image: traefik:v3.7
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - '--providers.docker.constraints=Label(`com.docker.compose.project`, `${COMPOSE_PROJECT_NAME:-bashkiria-events}`)'
+      - "--entrypoints.web.address=:80"
+      - "--api.dashboard=false"
+      - "--ping=true"
+      - "--ping.entrypoint=web"
+      - "--global.checknewversion=false"
+      - "--global.sendanonymoususage=false"
+    ports:
+      - "127.0.0.1:${GATEWAY_HTTP_PORT:-8080}:80"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      parser:
+        condition: service_started
+      interaction:
+        condition: service_started
+      searcher:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping", "--ping.entrypoint=web", "--entrypoints.web.address=:80"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    networks:
+      - backend
+    restart: unless-stopped
+
   postgres:
     image: postgres:18-alpine
     environment:
@@ -38,7 +72,7 @@ services:
       - backend
 
   parser:
-    profiles: ["parser"]
+    profiles: ["parser", "gateway"]
     build:
       context: ./backend/parser
     environment:
@@ -51,6 +85,22 @@ services:
       PGDATABASE: ${POSTGRES_DB:-bashkiria}
       Parser__ApiKey: ${PARSER_API_KEY:-}
       Parser__SchedulerEnabled: ${PARSER_SCHEDULER_ENABLED:-true}
+      Parser__WorkerEnabled: ${PARSER_WORKER_ENABLED:-true}
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${COMPOSE_PROJECT_NAME:-bashkiria-events}_backend
+      traefik.http.routers.parser.rule: 'Path(`/api/v1/parser`) || PathPrefix(`/api/v1/parser/`)'
+      traefik.http.routers.parser.entrypoints: web
+      traefik.http.routers.parser.service: parser
+      traefik.http.routers.parser-meta.rule: 'Path(`/parser/health`) || Path(`/parser/health/ready`) || Path(`/parser/openapi/v1.json`)'
+      traefik.http.routers.parser-meta.entrypoints: web
+      traefik.http.routers.parser-meta.service: parser
+      traefik.http.routers.parser-meta.middlewares: parser-meta-prefix
+      traefik.http.middlewares.parser-meta-prefix.stripprefix.prefixes: /parser
+      traefik.http.services.parser.loadbalancer.server.port: "8080"
+      traefik.http.services.parser.loadbalancer.healthcheck.path: /health/ready
+      traefik.http.services.parser.loadbalancer.healthcheck.interval: 10s
+      traefik.http.services.parser.loadbalancer.healthcheck.timeout: 3s
     ports:
       - "127.0.0.1:${PARSER_HTTP_PORT:-5164}:8080"
     depends_on:
@@ -63,7 +113,7 @@ services:
       - backend
 
   interaction:
-    profiles: ["interaction"]
+    profiles: ["interaction", "gateway"]
     build:
       context: ./backend/interactionService
     environment:
@@ -78,6 +128,21 @@ services:
       Interaction__AdminApiKey: ${INTERACTION_ADMIN_API_KEY:-}
       Interaction__DeliveryApiKey: ${INTERACTION_DELIVERY_API_KEY:-}
       Interaction__WorkerEnabled: ${INTERACTION_WORKER_ENABLED:-true}
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${COMPOSE_PROJECT_NAME:-bashkiria-events}_backend
+      traefik.http.routers.interaction.rule: 'Path(`/api/v1/interaction`) || PathPrefix(`/api/v1/interaction/`)'
+      traefik.http.routers.interaction.entrypoints: web
+      traefik.http.routers.interaction.service: interaction
+      traefik.http.routers.interaction-meta.rule: 'Path(`/interaction/health`) || Path(`/interaction/health/ready`) || Path(`/interaction/openapi/v1.json`)'
+      traefik.http.routers.interaction-meta.entrypoints: web
+      traefik.http.routers.interaction-meta.service: interaction
+      traefik.http.routers.interaction-meta.middlewares: interaction-meta-prefix
+      traefik.http.middlewares.interaction-meta-prefix.stripprefix.prefixes: /interaction
+      traefik.http.services.interaction.loadbalancer.server.port: "8080"
+      traefik.http.services.interaction.loadbalancer.healthcheck.path: /health/ready
+      traefik.http.services.interaction.loadbalancer.healthcheck.interval: 10s
+      traefik.http.services.interaction.loadbalancer.healthcheck.timeout: 3s
     ports:
       - "127.0.0.1:${INTERACTION_HTTP_PORT:-5266}:8080"
     depends_on:
@@ -98,6 +163,19 @@ services:
       PGUSER: ${POSTGRES_USER:-bashkiria}
       PGPASSWORD: ${POSTGRES_PASSWORD:-bashkiria}
       PGDATABASE: ${POSTGRES_DB:-bashkiria}
+      ROOT_PATH: /search
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${COMPOSE_PROJECT_NAME:-bashkiria-events}_backend
+      traefik.http.routers.searcher.rule: 'Path(`/search`) || PathPrefix(`/search/`)'
+      traefik.http.routers.searcher.entrypoints: web
+      traefik.http.routers.searcher.service: searcher
+      traefik.http.routers.searcher.middlewares: searcher-prefix
+      traefik.http.middlewares.searcher-prefix.stripprefix.prefixes: /search
+      traefik.http.services.searcher.loadbalancer.server.port: "8080"
+      traefik.http.services.searcher.loadbalancer.healthcheck.path: /health
+      traefik.http.services.searcher.loadbalancer.healthcheck.interval: 10s
+      traefik.http.services.searcher.loadbalancer.healthcheck.timeout: 3s
     ports:
       - "127.0.0.1:${SEARCHER_HTTP_PORT:-8000}:8080"
     depends_on:

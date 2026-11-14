@@ -28,13 +28,25 @@ docker compose up -d --build searcher
 подходят для последующего подключения инструментов AI; этот сервис работает
 самостоятельно, без вызовов модели. Подключение инструментов к чату — отдельный шаг.
 
+## Доступ через Gateway
+
+`docker compose --profile gateway up -d --build --wait` запускает общий вход:
+`http://localhost:8080/search/events`, Swagger `/search/docs`, OpenAPI
+`/search/openapi.json`, health `/search/health`. Удаляется префикс `/search`;
+ROOT_PATH=/search в Compose сохраняет правильные ссылки Swagger.
+Локальный `.env` использует пустой ROOT_PATH и порт PostgreSQL из корневого
+POSTGRES_PORT (сейчас 55432). В Docker остаются PGHOST=postgres, PGPORT=5432.
+Ключ API поиску не требуется. [Полные маршруты Gateway](../gateway/README.md).
+
 ## Полные события и пагинация
 
-Каждое событие содержит **все столбцы `parser_events` из миграции 0003**, включая
+Каждое событие содержит **все столбцы `parser_events` до миграции 0005**, включая
 описание без обрезки, даты и время, цены, координаты, данные модерации и
 `issues_json`. В `sources` возвращаются все столбцы связанных
 `parser_event_sources`, включая ссылки, `raw_document_id`, `candidate_json` и
 время проверки. Сырые HTML-страницы, история аудита и задания сбора не загружаются.
+Также возвращаются city_id/venue_id (UUID или null) и source_type
+(Page, Import, Manual) в событии и источниках.
 Дополнительное поле `time_zone` — `Asia/Yekaterinburg`.
 
 `numeric` сериализуется в JSON строками, например `"price_min": "500.00"`,

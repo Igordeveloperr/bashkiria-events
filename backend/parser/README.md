@@ -45,6 +45,12 @@ Compose ждёт готовности PostgreSQL и успешных мигра�
 
 ## Общие правила API
 
+Через Gateway: `http://localhost:8080/api/v1/parser/...`. Пути и X-Parser-Key
+сохраняются. PARSER_API_KEY корневого `.env` передаётся контейнеру как Parser__ApiKey;
+для локального запуска настроен тот же ключ в `backend/parser/.env`.
+OpenAPI: `http://localhost:8080/parser/openapi/v1.json`.
+[Запуск и маршруты Gateway](../gateway/README.md).
+
 - Основной префикс: `/api/v1/parser`. JSON-поля имеют имена `camelCase`.
 - Для тела JSON передавай `Content-Type: application/json`.
 - Авторизация: `X-Parser-Key`, значение из `Parser:ApiKey`. В Development без

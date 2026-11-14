@@ -6,6 +6,34 @@
 - [База данных и миграции Alembic](backend/db/README.md)
 - [ИИ-сервис](backend/ai/README.md)
 - [Поисковый сервис](backend/searcher/README.md)
+- [Подписки, уведомления и обратная связь](backend/interactionService/README.md)
+- [API Gateway: маршруты, ключи и проверки](backend/gateway/README.md)
+
+## Единая точка входа
+
+Traefik v3.7 маршрутизирует запросы к parser, interaction и searcher.
+В корневом `.env` должны быть заданы PARSER_API_KEY, INTERACTION_API_KEY,
+INTERACTION_ADMIN_API_KEY, INTERACTION_DELIVERY_API_KEY (три ключа interaction
+разные, не короче 32 символов). Существующий `.env` не перезаписывай примером.
+
+```powershell
+docker compose --profile gateway up -d --build --wait
+```
+
+| Адрес | Назначение |
+| --- | --- |
+| `http://localhost:8080/api/v1/parser/events` | Карточки парсера, нужен X-Parser-Key |
+| `http://localhost:8080/api/v1/interaction/me/subscriptions` | Свои подписки, нужны X-Interaction-Key и проверенный X-User-Id |
+| `http://localhost:8080/search/events` | Поиск событий |
+| `http://localhost:8080/search/docs` | Swagger поиска |
+| `http://localhost:8080/parser/openapi/v1.json` | OpenAPI парсера |
+| `http://localhost:8080/interaction/openapi/v1.json` | OpenAPI interaction |
+
+GATEWAY_HTTP_PORT меняет порт 8080. Прямые порты сервисов сохранены для отладки.
+В текущем `.env` COMPOSE_PROJECT_NAME=bashkiria-db сохраняет существующие сеть
+и том; без переопределения применяется имя bashkiria-events из compose.yaml.
+Traefik не подставляет ключи и не аутентифицирует пользователей самостоятельно.
+Подробности: [Gateway README](backend/gateway/README.md).
 
 PostgreSQL и миграции запускаются из корня:
 
@@ -37,8 +65,9 @@ PostgreSQL проходит healthcheck, затем `migrate` выполняет
 
 По умолчанию база, пользователь и пароль — `bashkiria`, локальный порт — `5432`.
 Параметры можно задать в корневом `.env` по [.env.example](.env.example).
-Данные хранятся в томе `bashkiria-db_postgres_data`; имя проекта сохранено для
-совместимости с прежним Compose из `backend/db`.
+Данные текущего локального стека хранятся в `bashkiria-db_postgres_data`.
+Для сохранения этого тома используется COMPOSE_PROJECT_NAME=bashkiria-db
+в корневом `.env`; на новой установке имя тома зависит от имени Compose-проекта.
 
 Если Windows выдаёт `ports are not available` / `bind ... accesspermissions`
 для `5432`, задай свободный внешний порт в корневом `.env`, например:
