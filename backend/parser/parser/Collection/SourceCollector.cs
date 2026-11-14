@@ -4,7 +4,6 @@ using Bashkiria.Events.Parser.Models;
 using Bashkiria.Events.Parser.Parsing;
 using Bashkiria.Events.Parser.Processing;
 using Bashkiria.Events.Parser.Storage;
-using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.Options;
 
 namespace Bashkiria.Events.Parser.Collection;
@@ -27,10 +26,11 @@ public sealed class SourceCollector(
         var added = 0; var updated = 0; var unchanged = 0;
         var consecutiveFailures = 0;
 
-        for (var page = 1; page <= (source.Kind == "Gkz" ? 1 : settings.MaxListingPages); page++)
+        var listingUrl = new Uri(source.ListingUrl);
+        var visitedListings = new HashSet<Uri>();
+        for (var page = 1; page <= settings.MaxListingPages && visitedListings.Add(listingUrl); page++)
         {
             await BeforeRequestAsync();
-            var listingUrl = new Uri(page == 1 ? source.ListingUrl : QueryHelpers.AddQueryString(source.ListingUrl, "page", page.ToString(System.Globalization.CultureInfo.InvariantCulture)));
             try
             {
                 var document = await client.DownloadAsync(source, listingUrl, cancellationToken);
@@ -38,6 +38,9 @@ public sealed class SourceCollector(
                 var discovered = registry.DiscoverLinks(source, document.Content, listingUrl);
                 var newLinks = discovered.Count(url => links.Add(url));
                 if (newLinks == 0 || links.Count >= maxPages) break;
+                var nextListing = registry.NextListingPage(source, document.Content, document.Url, page + 1);
+                if (nextListing is null) break;
+                listingUrl = nextListing;
             }
             catch (Exception exception) when (IsDownloadFailure(exception, cancellationToken) && listingId.HasValue)
             {

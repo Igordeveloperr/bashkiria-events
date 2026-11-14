@@ -50,6 +50,11 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IEventParser, GkzParser>();
         services.AddSingleton<GkzListingParser>();
         services.AddSingleton<StructuredEventParser>();
+        services.AddSingleton<ISourceEventParser, GkzSourceParser>();
+        services.AddSingleton<ISourceEventParser>(provider => provider.GetRequiredService<StructuredEventParser>());
+        services.AddSingleton<ISourceEventParser, GorodzovetParser>();
+        services.AddSingleton<ISourceEventParser, BashgfParser>();
+        services.AddSingleton<ISourceEventParser, BashoperaParser>();
         services.AddSingleton<SourceRegistry>();
         services.AddSingleton<CollectionRunStore>();
         services.AddSingleton<EventReviewService>();
@@ -59,9 +64,9 @@ public static class ServiceCollectionExtensions
         services.AddExceptionHandler<ParserExceptionHandler>();
         services.AddProblemDetails();
         services.AddHttpClient<SourcePageClient>(ConfigureHttpClient)
-            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
+            .ConfigurePrimaryHttpMessageHandler(CreateHttpHandler);
         services.AddHttpClient<GkzClient>(ConfigureHttpClient)
-            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
+            .ConfigurePrimaryHttpMessageHandler(CreateHttpHandler);
         return services;
 
         static void ConfigureHttpClient(IServiceProvider provider, HttpClient client)
@@ -69,10 +74,15 @@ public static class ServiceCollectionExtensions
             var options = provider.GetRequiredService<IOptions<ParserOptions>>().Value;
             client.Timeout = TimeSpan.FromSeconds(options.RequestTimeoutSeconds);
             client.MaxResponseContentBufferSize = 8 * 1024 * 1024;
-            client.DefaultRequestHeaders.UserAgent.ParseAdd("BashkiriaEventsParser/1.0");
             client.DefaultRequestHeaders.Accept.ParseAdd("text/html");
         }
     }
+
+    private static HttpClientHandler CreateHttpHandler() => new()
+    {
+        AllowAutoRedirect = false, UseCookies = false,
+        AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate | System.Net.DecompressionMethods.Brotli
+    };
 
     private static bool ValidSources(ParserOptions options)
     {
@@ -80,13 +90,15 @@ public static class ServiceCollectionExtensions
         {
             foreach (var source in options.Sources)
             {
-                if (!Regex.IsMatch(source.Id, "^[a-z][a-z0-9_-]{0,63}$") || source.Kind is not ("Gkz" or "Structured") ||
+                if (!Regex.IsMatch(source.Id, "^[a-z][a-z0-9_-]{0,63}$") ||
                     !Uri.TryCreate(source.ListingUrl, UriKind.Absolute, out var url) || !Common.SourceUrls.IsAllowed(url, url) ||
-                    source.Kind == "Gkz" && Common.SourceUrls.Host(url) != "gkzbashkortostan.ru") return false;
+                    !SourceKinds.Allows(source.Kind, url)) return false;
+                using var request = new HttpRequestMessage();
+                if (!string.IsNullOrWhiteSpace(source.UserAgent)) request.Headers.UserAgent.ParseAdd(source.UserAgent);
                 _ = new Regex(source.EventPathPattern, RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100));
             }
             return true;
         }
-        catch (ArgumentException) { return false; }
+        catch (Exception exception) when (exception is ArgumentException or FormatException) { return false; }
     }
 }
