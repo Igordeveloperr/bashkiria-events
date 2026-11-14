@@ -171,7 +171,7 @@ public sealed class RawDocumentTests
 
     private sealed class MemoryEventStore : IEventStore
     {
-        public Task<EventSaveResult> SaveAsync(SourceOptions source, EventCandidate candidate, RawDocument document, CancellationToken token) =>
+        public Task<EventSaveResult> SaveAsync(EventWriteContext source, EventCandidate candidate, RawDocument document, CancellationToken token) =>
             Task.FromResult(new EventSaveResult(Guid.NewGuid(), "added", PublicationStatus.Draft));
     }
 

@@ -2,7 +2,6 @@ using System.Text.Json.Nodes;
 using Bashkiria.Events.Parser.Common;
 using System.Data;
 using System.Text.Json;
-using Bashkiria.Events.Parser.Configuration;
 using Bashkiria.Events.Parser.Data;
 using Bashkiria.Events.Parser.Models;
 using Bashkiria.Events.Parser.Parsing;
@@ -14,10 +13,12 @@ namespace Bashkiria.Events.Parser.Storage;
 
 public sealed class EfEventStore(IDbContextFactory<ParserDbContext> contexts, CandidateNormalizer normalizer) : IEventStore
 {
-    public async Task<EventSaveResult> SaveAsync(SourceOptions source, EventCandidate candidate, RawDocument document, CancellationToken cancellationToken)
+    private const int MaxAttempts = 6;
+    public async Task<EventSaveResult> SaveAsync(EventWriteContext source, EventCandidate candidate, RawDocument document, CancellationToken cancellationToken)
     {
-        if (document.SourceId != source.Id || document.HttpStatus is < 200 or > 299)
-            throw new ArgumentException("Кандидат должен опираться на успешный ответ своего источника.");
+        if (document.SourceId != source.Id || document.SourceType != source.SourceType ||
+            source.SourceType == EventSourceType.Page && document.HttpStatus is not (>= 200 and <= 299))
+            throw new ArgumentException("Кандидат должен опираться на документ своего источника; для страницы требуется успешный HTTP-ответ.");
         var normalized = normalizer.Normalize(source.Id, candidate with { RawDocumentId = document.Id });
         for (var attempt = 0; ; attempt++)
         {
@@ -25,9 +26,12 @@ public sealed class EfEventStore(IDbContextFactory<ParserDbContext> contexts, Ca
             {
                 return await SaveOnceAsync(source, normalized, document, cancellationToken);
             }
-            catch (Exception exception) when (attempt < 2 && DatabaseErrors.IsConflict(exception))
+            catch (Exception exception) when (attempt < MaxAttempts - 1 && DatabaseErrors.IsConflict(exception))
             {
-                await Task.Delay(TimeSpan.FromMilliseconds(50 * (attempt + 1)), cancellationToken);
+                // Retry the entire transaction, not an individual INSERT. Jitter prevents
+                // concurrent writers from repeatedly meeting on the same predicate locks.
+                var delay = 50 * (1 << attempt) + Random.Shared.Next(25, 76);
+                await Task.Delay(TimeSpan.FromMilliseconds(delay), cancellationToken);
             }
             catch (Exception exception) when (DatabaseErrors.IsDatabaseFailure(exception))
             {
@@ -36,7 +40,7 @@ public sealed class EfEventStore(IDbContextFactory<ParserDbContext> contexts, Ca
         }
     }
 
-    private async Task<EventSaveResult> SaveOnceAsync(SourceOptions source, NormalizedCandidate normalized,
+    private async Task<EventSaveResult> SaveOnceAsync(EventWriteContext source, NormalizedCandidate normalized,
         RawDocument document, CancellationToken cancellationToken)
     {
         await using var db = await contexts.CreateDbContextAsync(cancellationToken);
@@ -53,8 +57,8 @@ public sealed class EfEventStore(IDbContextFactory<ParserDbContext> contexts, Ca
             provenance.CheckedAt = document.FetchedAt;
             if (provenance.Event.DataHash == normalized.DataHash)
             {
-                provenance.Event.VerifiedAt = document.FetchedAt;
-                provenance.Event.UpdatedAt = document.FetchedAt;
+                if (document.FetchedAt > provenance.Event.VerifiedAt) provenance.Event.VerifiedAt = document.FetchedAt;
+                if (document.FetchedAt > provenance.Event.UpdatedAt) provenance.Event.UpdatedAt = document.FetchedAt;
                 provenance.Event.Version++;
             }
             await db.SaveChangesAsync(cancellationToken);
@@ -75,27 +79,28 @@ public sealed class EfEventStore(IDbContextFactory<ParserDbContext> contexts, Ca
         var added = entity is null;
         entity ??= new ParsedEvent { Id = Guid.NewGuid(), CreatedAt = document.FetchedAt };
         var changed = entity.DataHash != normalized.DataHash;
-        var canReplace = added || source.Priority >= entity.SourcePriority;
+        var canReplace = added || source.Priority >= entity.SourcePriority &&
+            (source.AllowMergeReplacement || provenance?.EventId == entity.Id);
         if (changed && canReplace)
         {
-            Apply(entity, normalized, source.Priority, document.FetchedAt);
+            Apply(entity, normalized, source, document.FetchedAt);
             await db.AuditEntries.AddAsync(new EventAuditEntry
             {
                 Id = Guid.NewGuid(),
                 EventId = entity.Id,
-                Action = added ? "collected" : "source_updated",
-                Actor = "source:" + source.Id,
+                Action = added ? source.SourceType switch { EventSourceType.Manual => "created_manually", EventSourceType.Import => "imported", _ => "collected" } : "source_updated",
+                Actor = source.Actor ?? "source:" + source.Id,
                 CreatedAt = document.FetchedAt,
                 SnapshotJson = ParserJson.Serialize(new { Before = before is null ? null : JsonNode.Parse(before), After = JsonNode.Parse(normalized.CandidateJson), RawDocumentId = document.Id })
             }, cancellationToken);
         }
         else if (!changed)
         {
-            entity.VerifiedAt = document.FetchedAt;
-            entity.UpdatedAt = document.FetchedAt;
+            if (document.FetchedAt > entity.VerifiedAt) entity.VerifiedAt = document.FetchedAt;
+            if (document.FetchedAt > entity.UpdatedAt) entity.UpdatedAt = document.FetchedAt;
             entity.Version++;
         }
-        else if (normalized.Candidate.SourceStatus is SourceEventStatus.Cancelled or SourceEventStatus.Postponed)
+        else if (source.SourceType == EventSourceType.Page && normalized.Candidate.SourceStatus is (SourceEventStatus.Cancelled or SourceEventStatus.Postponed))
         {
             // A conflicting cancellation must never leave the old card in public results.
             entity.Status = normalized.Candidate.SourceStatus == SourceEventStatus.Cancelled ? PublicationStatus.Cancelled : PublicationStatus.Draft;
@@ -111,7 +116,7 @@ public sealed class EfEventStore(IDbContextFactory<ParserDbContext> contexts, Ca
                 Id = Guid.NewGuid(),
                 EventId = entity.Id,
                 Action = "source_observed",
-                Actor = "source:" + source.Id,
+                Actor = source.Actor ?? "source:" + source.Id,
                 CreatedAt = document.FetchedAt,
                 SnapshotJson = ParserJson.Serialize(new { Before = before is null ? null : JsonNode.Parse(before), After = JsonNode.Parse(normalized.CandidateJson), RawDocumentId = document.Id })
             }, cancellationToken);
@@ -126,6 +131,7 @@ public sealed class EfEventStore(IDbContextFactory<ParserDbContext> contexts, Ca
         provenance.Event = entity;
         provenance.EventId = entity.Id;
         provenance.SourceId = source.Id;
+        provenance.SourceType = source.SourceType;
         provenance.ExternalId = normalized.Candidate.ExternalId ?? normalized.Candidate.SourceUrl.AbsoluteUri;
         provenance.SourceUrl = normalized.Candidate.SourceUrl.AbsoluteUri;
         provenance.RawDocumentId = document.Id;
@@ -145,7 +151,7 @@ public sealed class EfEventStore(IDbContextFactory<ParserDbContext> contexts, Ca
         return new(entity.Id, added ? "added" : changed && canReplace ? "updated" : "unchanged", entity.Status);
     }
 
-    private static void Apply(ParsedEvent entity, NormalizedCandidate normalized, int priority, DateTimeOffset checkedAt)
+    private static void Apply(ParsedEvent entity, NormalizedCandidate normalized, EventWriteContext source, DateTimeOffset checkedAt)
     {
         var suppressedStatus = entity.Status;
         var item = normalized.Candidate;
@@ -159,10 +165,11 @@ public sealed class EfEventStore(IDbContextFactory<ParserDbContext> contexts, Ca
         entity.PriceMin = item.PriceMin; entity.PriceMax = item.PriceMax; entity.IsFree = item.IsFree; entity.AgeLimit = item.AgeLimit;
         entity.Language = item.Language; entity.OrgLink = item.OrgLink?.AbsoluteUri; entity.ImageUrl = item.ImageUrl?.AbsoluteUri;
         entity.SourceStatus = item.SourceStatus; entity.Confidence = normalized.Confidence;
-        entity.IssuesJson = ParserJson.Serialize(item.Issues); entity.DataHash = normalized.DataHash; entity.SourcePriority = priority;
+        entity.IssuesJson = ParserJson.Serialize(item.Issues); entity.DataHash = normalized.DataHash; entity.SourcePriority = source.Priority;
+        entity.SourceType = source.SourceType;
         entity.Status = item.SourceStatus == SourceEventStatus.Cancelled ? PublicationStatus.Cancelled :
             entity.ManuallySuppressed ? suppressedStatus :
-            !item.RequiresReview && item.Issues.Count == 0 && normalized.Confidence >= 0.9m ? PublicationStatus.Published : PublicationStatus.Draft;
+            source.SourceType == EventSourceType.Page && !item.RequiresReview && item.Issues.Count == 0 && normalized.Confidence >= 0.9m ? PublicationStatus.Published : PublicationStatus.Draft;
         entity.VerifiedAt = checkedAt; entity.UpdatedAt = checkedAt;
         if (!entity.ManuallySuppressed) { entity.ReviewedAt = null; entity.ReviewNote = null; }
         entity.Version++;

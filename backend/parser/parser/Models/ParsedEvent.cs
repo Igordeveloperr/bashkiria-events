@@ -34,6 +34,7 @@ public sealed class ParsedEvent
     public string IssuesJson { get; set; } = "[]";
     public string DataHash { get; set; } = string.Empty;
     public int SourcePriority { get; set; }
+    public EventSourceType SourceType { get; set; }
     public DateTimeOffset VerifiedAt { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }

@@ -250,7 +250,7 @@ Query: только `page` / `pageSize`; значения, ограничени�
 | Поле | Тип | Смысл |
 | --- | --- | --- |
 | `id`, `createdAt` | UUID, timestamp | ID и время записи |
-| `action` | string | `collected`, `source_updated`, `source_observed`, `moderated` |
+| `action` | string | `collected`, `source_updated`, `source_observed`, `moderated`, `created_manually`, `imported` |
 | `actor` | string | `source:{sourceId}` или `api-key` |
 | `snapshot` | object | Сбор: `before`, `after`, `rawDocumentId`; модерация: `before`, `review` |
 
@@ -258,7 +258,7 @@ Query: только `page` / `pageSize`; значения, ограничени�
 
 ### GET /api/v1/parser/raw-documents/{id}
 
-`200`: `RawDocument`, включая полный текст ответа в JSON-поле `content`.
+`200`: `RawDocument`, включая исходный HTML, JSON или CSV в поле `content`.
 `404`: документ отсутствует. HTML не возвращается как исполняемая HTML-страница.
 
 ### POST /api/v1/parser/raw-documents/{id}/reparse
@@ -283,8 +283,8 @@ Query: только `page` / `pageSize`; значения, ограничени�
 
 `outcome`: `added`, `updated`, `unchanged`; `status`: PublicationStatus.
 Без кандидатов возвращается `results: []`.
-`400`: HTTP-статус документа вне `200..299`.
-`404`: нет документа либо источник неизвестен / отключён.
+`400`: HTTP-статус страницы вне `200..299` или некорректное содержимое файла.
+`404`: нет документа либо источник страницы неизвестен / отключён.
 Старый исходник не заменяет более новую проверку. `fetchedAt` не меняется:
 повторный разбор не подтверждает свежесть данных на сайте. Кандидаты сохраняются
 отдельными транзакциями; общей транзакции на документ нет.
@@ -303,6 +303,154 @@ Query: только `page` / `pageSize`; значения, ограничени�
 
 Счётчики всех сохранённых данных, без фильтра свежести. Нулевые группы отсутствуют.
 Запросы счётчиков выполняются последовательно, без единого транзакционного снимка.
+
+### POST /api/v1/parser/events — ручное создание
+
+JSON-тело: `EventInput` (контракт ниже). Обязательный заголовок
+`Idempotency-Key` — непустой UUID, который клиент создаёт один раз и сохраняет
+для повторов этого запроса. `externalId` в ручном POST не используется и отклоняется.
+
+- `201`: добавлена новая карточка; ответ `CreateEventResponse`, `Location` — путь карточки.
+- `200`: повтор запроса или объединение с уже существующей карточкой; тот же контракт ответа.
+- `400`: нет ключа, неверный JSON или поля; ошибки полей содержатся в `errors` ProblemDetails.
+- `409`: ключ уже использован с другим содержимым. Изменять карточку нужно через `/review` с `expectedVersion`.
+- `413`: тело больше 128 KiB; `415`: нужен `application/json`, кодировка UTF-8.
+
+`CreateEventResponse`: `{eventId: UUID, outcome: string, status: PublicationStatus,
+rawDocumentId: UUID, issues: ParsingIssue[], requiresReview: boolean}`.
+`outcome`: `added`, `updated`, `unchanged`. Новые полные записи также создаются
+черновиками; явно отменённые — отменёнными. Публикация выполняется модерацией.
+При совпадении с существующей карточкой она возвращается без перезаписи основных
+полей; добавляется происхождение ручного ввода.
+
+```powershell
+$headers = @{ 'Idempotency-Key' = [guid]::NewGuid().ToString() }
+# Если ключ доступа настроен: $headers['X-Parser-Key'] = $env:PARSER_API_KEY
+# manual-event.json содержит реальное мероприятие в формате EventInput.
+Invoke-RestMethod -Method Post -Uri 'http://localhost:5164/api/v1/parser/events' `
+    -Headers $headers -ContentType 'application/json; charset=utf-8' -InFile './manual-event.json'
+```
+
+### POST /api/v1/parser/imports/json/{datasetId}
+
+Тело — JSON-массив `EventInput[]`. Content-Type: `application/json; charset=utf-8`.
+`datasetId` — стабильное имя набора: `^[a-z][a-z0-9_-]{0,63}$`, например `museum-ufa`.
+Для обновления того же набора сохраняй `datasetId`; его записи получают источник
+`import:{datasetId}`. ID набора не добавляется в очередь обхода внешних сайтов.
+
+`200`: `ImportResponse`, даже если часть строк отклонена. `400`: неверная структура
+файла, ID набора, пустой массив или превышение числа строк. `413`: превышен размер;
+`415`: неверный Content-Type / кодировка. Общие ошибки БД — `503`.
+
+```powershell
+Invoke-RestMethod -Method Post `
+    -Uri 'http://localhost:5164/api/v1/parser/imports/json/museum-ufa' `
+    -ContentType 'application/json; charset=utf-8' -InFile './events.json' |
+    ConvertTo-Json -Depth 10
+```
+
+### POST /api/v1/parser/imports/csv/{datasetId}
+
+Тело — сам CSV-файл UTF-8, допускается BOM. Content-Type: `text/csv; charset=utf-8`.
+`multipart/form-data` не используется. Ответы и правила `datasetId` — как у JSON.
+
+- Разделитель `,` или `;` определяется автоматически. Кавычки, `""` и переносы
+  строк внутри поля обрабатываются CsvHelper.
+- Первая запись — заголовки. Допустимы имена EventInput в camelCase или snake_case,
+  регистр незначим; обязателен `title`. Неизвестные и повторяющиеся заголовки дают `400`.
+- Пустая ячейка означает отсутствие значения. Даты: `yyyy-MM-dd`, время:
+  `HH:mm` / `HH:mm:ss`. Enum — как в JSON, boolean — `true` / `false`.
+- Числа допускают десятичную точку или запятую; поле с запятой нужно заключить
+  в кавычки, если она же служит разделителем. Цены указываются числом без `руб` / `₽`.
+- Теги внутри ячейки разделяются `|`. Максимальный размер одного CSV-поля — 65536 символов.
+- Нарушенная структура CSV отклоняет весь файл до записи данных. Неверные значения
+  отдельных полей отклоняют соответствующую запись и отражаются в отчёте.
+
+```powershell
+Invoke-RestMethod -Method Post `
+    -Uri 'http://localhost:5164/api/v1/parser/imports/csv/museum-ufa' `
+    -ContentType 'text/csv; charset=utf-8' -InFile './events.csv' |
+    ConvertTo-Json -Depth 10
+```
+
+Пример строки заголовков:
+
+```csv
+externalId;title;category;startDate;startTime;city;venue;address;priceMin;priceMax;isFree;ageLimit;sourceUrl;sourceStatus;tags
+```
+
+### EventInput — поля ручного ввода и импорта
+
+| Поля | Тип | Правило |
+| --- | --- | --- |
+| `title` | string | Обязательно, непустое, до 500 символов |
+| `externalId` | string / null | Только импорт: стабильный ID события / сеанса внутри набора, до 200 символов |
+| `sourceUrl` | URL / null | Ссылка на реальное событие, если есть; HTTP(S), без credentials, до 2048 символов |
+| `category` | EventCategory | По умолчанию `other` |
+| `tags` | string[] / null | До 50 непустых тегов, каждый до 100 символов |
+| `startDate`, `endDate` | date / null | Локальные даты |
+| `startTime`, `endTime` | time / null | Локальное время в Asia/Yekaterinburg |
+| `city`, `venue`, `address` | string / null | До 200 / 500 / 2000 символов |
+| `description` | string / null | До 50000 символов |
+| `latitude`, `longitude` | decimal / null | ±90 / ±180, до 7 знаков после точки |
+| `priceMin`, `priceMax` | decimal / null | Рубли, 0..9999999999.99, до 2 знаков после точки; максимум не меньше минимума |
+| `isFree` | boolean / null | `true` задаёт цены 0/0; противоречие положительной цене отклоняется |
+| `ageLimit` | integer / null | `0`, `6`, `12`, `16`, `18`; неизвестное — `null` |
+| `language` | string / null | До 100 символов |
+| `orgLink`, `imageUrl` | URL / null | HTTP(S), без credentials, до 2048 символов |
+| `sourceStatus` | SourceEventStatus | По умолчанию `unknown`; статус у источника, не команда публикации |
+
+Неизвестные JSON-поля и повторяющиеся имена отклоняются. Нулевые символы в тексте
+не допускаются. Известное время окончания без `endDate` относится к `startDate`;
+для перехода через полночь укажи `endDate` явно. Окончание раньше начала отклоняется.
+Отсутствующие город, площадка, адрес, начало, цена и возраст не подставляются:
+запись сохраняется в черновик с соответствующими `issues`.
+
+### ImportResponse и идемпотентность
+
+| Поле | Тип | Назначение |
+| --- | --- | --- |
+| `rawDocumentId` | UUID | Сохранённый оригинал файла |
+| `datasetId` | string / null | Имя набора; `null` при повторном разборе ручной записи |
+| `total` | integer | Всего входных записей |
+| `added`, `updated`, `unchanged`, `rejected` | integer | Итоги обработки; сумма равна total |
+| `requiresReview` | integer | Результаты со статусом draft |
+| `items` | ImportRowResponse[] | Результат каждой записи |
+
+`ImportRowResponse`: `{row: integer, externalId: string|null, eventId: UUID|null,
+outcome: string, status: PublicationStatus|null, issues: ParsingIssue[], errors: InputError[]}`.
+`outcome`: `added`, `updated`, `unchanged`, `rejected`.
+`InputError`: `{field: string, code: string, message: string}`.
+`row` — номер записи: в JSON начиная с 1, в CSV начиная с 2 с учётом заголовка;
+это не номер физической строки при многострочных ячейках. При отказе `eventId` и
+`status` равны `null`. `issues` относятся к входным данным, `status` — к полученной
+карточке, включая уже существующую при объединении.
+
+- Повтор того же файла в том же наборе повторно использует исходный документ,
+  не создаёт дубли и возвращает `unchanged` для неизменившихся записей.
+- Для обновления, включая перенос сеанса, передавай один и тот же `externalId`.
+  Повторяющийся явный ID внутри файла отклоняется начиная со второго появления.
+- Без `externalId` используется ключ названия, города, площадки, даты и времени.
+  Если идентифицирующих данных не хватает — хеш входной записи. Перенос без
+  стабильного ID может создать новую карточку; для обновляемых наборов ID обязателен.
+- Импорт не перезаписывает основные поля чужой карточки при первом объединении;
+  его приоритет ниже сайтов учреждений и ручного ввода. Отмена в файле не снимает
+  с публикации карточку, подтверждённую более приоритетным источником.
+- Изменившаяся собственная запись импорта снова требует модерации; повтор
+  неизменившейся записи сохраняет ручные исправления и статус.
+- URL из файла не загружаются. `verifiedAt` исходно означает время загрузки данных;
+  публикация модератором подтверждает ручную / импортную карточку заново.
+- Исходники ручного ввода и файлов имеют честный внутренний URN
+  `urn:bashkiria-events:...`, `httpStatus=null`, тип `manual` / `import` и MIME-тип.
+  При отсутствии внешнего `sourceUrl` такой URN также используется в происхождении
+  мероприятия. Несуществующие веб-ссылки не генерируются.
+- Обработка выполняется в HTTP-запросе, последовательно, с CancellationToken.
+  Файл сохраняется до записи мероприятий; каждое мероприятие — отдельная транзакция.
+  При обрыве / ошибке БД часть записей может быть сохранена: повтори тот же файл.
+  Отчёт возвращается ответом POST; отдельного хранилища отчётов импорта нет.
+- `/raw-documents/{id}/reparse` поддерживает файлы и ручные записи без новых
+  загрузок. Для них возвращается ImportResponse; исходное время не меняется,
+  более новая версия записи не откатывается старым файлом.
 
 ### Preview: только Development
 
@@ -397,12 +545,12 @@ Preview-разбор не выполняет полную нормализаци
 | `reviewedAt`, `reviewNote` | timestamp / null, string / null | Последняя модерация и обоснование |
 | `version` | integer, int64 | Версия для `expectedVersion` |
 | `sources` | EventSourceResponse[] | Происхождение карточки |
-| `sourceType` | string | `page` |
+| `sourceType` | EventSourceType | Тип основных данных: `page`, `import`, `manual` |
 | `sourceHash` | string | SHA-256 нормализованного кандидата основных данных; не хеш HTML |
 | `dedupKey` | string | SHA-256 ключа межисточниковой дедупликации |
 
 `EventSourceResponse`: `{sourceId: string, sourceUrl: string, rawDocumentId: UUID,
-checkedAt: timestamp}`. Проверки второстепенного источника отражаются в его
+checkedAt: timestamp, sourceType: EventSourceType}`. Проверки второстепенного источника отражаются в его
 `checkedAt` и не обязательно обновляют `verifiedAt` основной карточки.
 
 ### EventCandidate
@@ -429,9 +577,10 @@ checkedAt: timestamp}`. Проверки второстепенного исто
 | Поле | Тип | Смысл |
 | --- | --- | --- |
 | `id`, `sourceId` | UUID, string | ID исходника и источника |
-| `url` | string (URL) | Адрес конкретного HTTP-ответа |
-| `fetchedAt`, `httpStatus` | timestamp, integer | Время получения и HTTP-код источника |
-| `content` | string | Декодированный текст ответа |
+| `url` | string (URI) | URL HTTP-ответа или внутренний URN ручного ввода / файла |
+| `fetchedAt`, `httpStatus` | timestamp, integer / null | Время получения; HTTP-код только для страниц |
+| `sourceType`, `contentType` | EventSourceType, string | `page` / `import` / `manual`; MIME-тип исходника |
+| `content` | string | Исходный HTML, JSON ручного ввода или JSON/CSV-файл |
 | `contentHash` | string | SHA-256 UTF-8 представления `content`, 64 строчных hex-символа |
 
 ### Enum
@@ -442,6 +591,7 @@ checkedAt: timestamp}`. Проверки второстепенного исто
 | SourceEventStatus | `unknown`, `scheduled`, `cancelled`, `postponed`, `rescheduled`, `soldOut` |
 | CollectionRunStatus | `queued`, `running`, `completed`, `completedWithErrors`, `failed`, `cancelled` |
 | EventCategory | `other`, `concert`, `theatre`, `exhibition`, `festival`, `cinema`, `excursion`, `workshop`, `lecture` |
+| EventSourceType | `page`, `import`, `manual` |
 
 ### ParsingIssue
 
@@ -465,6 +615,7 @@ checkedAt: timestamp}`. Проверки второстепенного исто
 | `schedule_unconfirmed` | У агрегатора не найдено отдельное видимое расписание сеансов |
 | `session_end_conflict`, `session_venue_conflict` | Строки расписания агрегатора расходятся в окончании / площадке |
 | `inferred_start_year` | Год сеанса театра сопоставлен по дню недели и требует проверки |
+| `input_requires_review` | Данные внесены вручную или из файла и требуют модерации |
 
 ## Конфигурация
 
@@ -487,6 +638,11 @@ Development-файл `backend/parser/.env` добавляет отсутству
 | `MaxConsecutiveFailures` | `3` | `1..10` последовательных ошибок загрузки |
 | `FreshnessHours` | `24` | `1..168` часов для `/events/published` |
 | `Sources` | см. ниже | 1–20 элементов, ID уникальны без учёта регистра |
+| `Ingestion:MaxFileBytes` | `5242880` | `1024..20971520` байт, общий предел JSON/CSV-файла |
+| `Ingestion:MaxRows` | `1000` | `1..5000` записей на файл |
+
+В окружении параметры импорта задаются как `Parser__Ingestion__MaxFileBytes`
+и `Parser__Ingestion__MaxRows`. Ручной POST имеет отдельный фиксированный предел 128 KiB.
 
 ### Sources
 
@@ -617,8 +773,9 @@ Event/Place/Offer. Следующие страницы списка запраш
    относится к исходному тексту. Дубли проверяются при сохранении;
    API списка читает готовые записи.
 5. Мероприятие, происхождение и аудит сохраняются одной Serializable-транзакцией.
-   Для конфликтов сериализации, deadlock и уникальности — до 3 попыток,
-   паузы 50 и 100 мс. Уникальные индексы защищают от конкурентных дублей.
+   Для конфликтов сериализации, deadlock и уникальности — до 6 попыток всей
+   транзакции: экспоненциальные паузы 50–800 мс плюс случайные 25–75 мс.
+   Уникальные индексы защищают от конкурентных дублей.
 6. Старый исходник не заменяет новую проверку. Неизменившиеся данные источника
    сохраняют ручные исправления. Основные поля объединённой карточки заменяются
    источником с не меньшим приоритетом. Отмена / перенос у второстепенного источника
@@ -637,6 +794,20 @@ Event/Place/Offer. Следующие страницы списка запраш
 | `parser_event_sources` | Происхождение, идентичность, проверки | `0003_parser_pipeline` |
 | `parser_event_audit` | Изменения и модерация | `0003_parser_pipeline` |
 | `parser_collection_runs` | Очередь, аренды, отчёты | `0003_parser_pipeline` |
+
+`0004_parser_ingestion` добавляет тип происхождения в события, связи и исходники,
+MIME-тип исходника и разрешает внутренний URN с `http_status=NULL` для ручного
+ввода / импорта. Существующие строки сохраняются с типом Page. Откат этой ревизии
+блокируется, если уже есть ручные / импортные данные: они не удаляются автоматически.
+
+Перед запуском новой версии выполни миграции:
+
+```powershell
+docker compose run --rm --build migrate
+```
+
+Если существующие контейнеры созданы под именем `bashkiria-db`, используй
+`docker compose -p bashkiria-db run --rm --build migrate`.
 
 Сервис не вызывает `EnsureCreated` / EF migrations. Схему обновляет только
 `backend/db`. Автоматической очистки исходников и истории нет. Документы,
@@ -671,11 +842,14 @@ dotnet test backend/parser/parser.slnx
 | GET | `/api/v1/parser/runs/{id}` | Получить состояние задания и итоговый отчёт |
 | DELETE | `/api/v1/parser/runs/{id}` | Отменить активное задание, сохранив историю |
 | GET | `/api/v1/parser/events` | Получить мероприятия с пагинацией и фильтрами по статусу и городу |
+| POST | `/api/v1/parser/events` | Вручную создать карточку с Idempotency-Key; новые данные требуют модерации |
+| POST | `/api/v1/parser/imports/json/{datasetId}` | Загрузить JSON-массив и получить построчный отчёт импорта |
+| POST | `/api/v1/parser/imports/csv/{datasetId}` | Загрузить UTF-8 CSV и получить построчный отчёт импорта |
 | GET | `/api/v1/parser/events/published` | Получить опубликованные, свежие и ещё актуальные мероприятия |
 | GET | `/api/v1/parser/events/{id}` | Получить карточку мероприятия, её версию и источники |
 | PATCH | `/api/v1/parser/events/{id}/review` | Исправить поля и изменить статус публикации с проверкой версии |
 | GET | `/api/v1/parser/events/{id}/audit` | Получить последние 100 изменений мероприятия |
-| GET | `/api/v1/parser/raw-documents/{id}` | Получить сохранённый HTTP-ответ источника, включая HTML |
+| GET | `/api/v1/parser/raw-documents/{id}` | Получить исходный HTML, JSON ручного ввода или файл импорта |
 | POST | `/api/v1/parser/raw-documents/{id}/reparse` | Повторно разобрать исходник и сохранить мероприятия без новой загрузки |
 | GET | `/api/v1/parser/stats` | Получить счётчики исходников, мероприятий и заданий |
 | POST | `/parser/preview` | Разобрать переданный HTML карточки ГКЗ без записи в БД; только Development |

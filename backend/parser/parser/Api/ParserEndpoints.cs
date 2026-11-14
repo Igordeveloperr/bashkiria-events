@@ -9,6 +9,7 @@ using Bashkiria.Events.Parser.Jobs;
 using Bashkiria.Events.Parser.Models;
 using Bashkiria.Events.Parser.Processing;
 using Bashkiria.Events.Parser.Storage;
+using Bashkiria.Events.Parser.Ingestion;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
@@ -20,6 +21,7 @@ public static class ParserEndpoints
     {
         var api = app.MapGroup("/api/v1/parser").AddEndpointFilter<ParserApiKeyFilter>()
             .RequireRateLimiting("parser-api").WithTags("Parser");
+        api.MapIngestionEndpoints();
 
         api.MapGet("/sources", (SourceRegistry sources) => Results.Ok(sources.Sources.Select(source => new
         { source.Id, source.Kind, source.Enabled, source.ListingUrl, source.Priority })));
@@ -114,17 +116,18 @@ public static class ParserEndpoints
         });
 
         api.MapPost("/raw-documents/{id:guid}/reparse", async (Guid id, IDbContextFactory<ParserDbContext> contexts,
-            SourceRegistry sources, IEventStore events, CancellationToken token) =>
+            SourceRegistry sources, IEventStore events, EventIngestionService ingestion, CancellationToken token) =>
         {
             await using var db = await contexts.CreateDbContextAsync(token);
             var document = await db.RawDocuments.AsNoTracking().SingleOrDefaultAsync(item => item.Id == id, token)
                 ?? throw new KeyNotFoundException();
+            if (document.SourceType != EventSourceType.Page) return Results.Ok(await ingestion.ReplayAsync(document, token));
             if (document.HttpStatus is < 200 or > 299) return Results.BadRequest(new { message = "Нельзя разбирать неуспешный HTTP-ответ." });
             var source = sources.Get(document.SourceId);
             var candidates = sources.Parse(source, document.Content, document.Url);
             var results = new List<EventSaveResult>();
             foreach (var candidate in candidates)
-                results.Add(await events.SaveAsync(source, candidate, document, token));
+                results.Add(await events.SaveAsync(new(source.Id, source.Priority), candidate, document, token));
             return Results.Ok(new { rawDocumentId = id, results });
         });
 
@@ -181,7 +184,8 @@ public static class ParserEndpoints
         ReviewNote = item.ReviewNote,
         Version = item.Version,
         SourceHash = item.DataHash,
+        SourceType = item.SourceType,
         DedupKey = item.DedupKey,
-        Sources = item.Sources.Select(source => new EventSourceResponse(source.SourceId, source.SourceUrl, source.RawDocumentId, source.CheckedAt)).ToArray()
+        Sources = item.Sources.Select(source => new EventSourceResponse(source.SourceId, source.SourceUrl, source.RawDocumentId, source.CheckedAt, source.SourceType)).ToArray()
     };
 }

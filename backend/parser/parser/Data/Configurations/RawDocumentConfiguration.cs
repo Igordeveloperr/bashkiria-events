@@ -12,6 +12,7 @@ public sealed class RawDocumentConfiguration : IEntityTypeConfiguration<RawDocum
         builder.HasKey(document => document.Id).HasName("parser_raw_documents_pkey");
         builder.Property(document => document.Id).HasColumnName("id").ValueGeneratedNever();
         builder.Property(document => document.SourceId).HasColumnName("source_id");
+        builder.Property(document => document.SourceType).HasConversion<string>();
         builder.Property(document => document.Url).HasColumnName("url")
             .HasConversion(url => url.AbsoluteUri, value => new Uri(value));
         builder.Property(document => document.FetchedAt).HasColumnName("fetched_at");

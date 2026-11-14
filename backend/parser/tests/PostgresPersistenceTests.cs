@@ -28,7 +28,7 @@ public sealed class PostgresPersistenceTests : IAsyncLifetime
     private readonly TimeProvider _clock = TimeProvider.System;
     private PooledDbContextFactory<ParserDbContext> Factory => new(new DbContextOptionsBuilder<ParserDbContext>()
         .UseNpgsql(Environment.GetEnvironmentVariable("PARSER_TEST_CONNECTION_STRING")).Options);
-    private SourceOptions Source => new() { Id = _sourceId, Priority = 100 };
+    private EventWriteContext Source => new(_sourceId, 100);
     private EfEventStore Store => new(Factory, new CandidateNormalizer(_clock));
 
     [PostgresFact]
@@ -66,7 +66,7 @@ public sealed class PostgresPersistenceTests : IAsyncLifetime
         var candidate = Candidate();
         var first = await SaveAsync(candidate);
         var document = await DocumentAsync(_sourceId + "-second");
-        var second = await Store.SaveAsync(new SourceOptions { Id = _sourceId + "-second", Priority = 50 },
+        var second = await Store.SaveAsync(new EventWriteContext(_sourceId + "-second", 50),
             candidate with { SourceUrl = new Uri("https://example.org/events/second/"), Description = "Lower priority" }, document, CancellationToken.None);
         _events.Add(second.EventId);
         Assert.Equal(first.EventId, second.EventId);

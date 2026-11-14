@@ -5,7 +5,8 @@ using Bashkiria.Events.Parser.Parsing;
 namespace Bashkiria.Events.Parser.Contracts;
 
 public sealed record PageResponse<T>(int Total, int Page, int PageSize, IReadOnlyList<T> Items);
-public sealed record EventSourceResponse(string SourceId, string SourceUrl, Guid RawDocumentId, DateTimeOffset CheckedAt);
+public sealed record EventSourceResponse(string SourceId, string SourceUrl, Guid RawDocumentId, DateTimeOffset CheckedAt,
+    EventSourceType SourceType = EventSourceType.Page);
 public sealed record CollectionRunResponse(Guid Id, string SourceId, CollectionRunStatus Status, int MaxPages, int Attempts,
     DateTimeOffset CreatedAt, DateTimeOffset? StartedAt, DateTimeOffset? FinishedAt, string? Error, CollectionResult? Report);
 
@@ -49,7 +50,7 @@ public sealed class EventResponse
     public string? ReviewNote { get; init; }
     public long Version { get; init; }
     public required IReadOnlyList<EventSourceResponse> Sources { get; init; }
-    public string SourceType { get; init; } = "page";
+    public EventSourceType SourceType { get; init; }
     public required string SourceHash { get; init; }
     public required string DedupKey { get; init; }
 }

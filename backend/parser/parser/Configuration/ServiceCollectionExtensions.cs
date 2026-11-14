@@ -11,6 +11,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Npgsql;
 using System.Text.RegularExpressions;
+using Bashkiria.Events.Parser.Ingestion;
 
 namespace Bashkiria.Events.Parser.Configuration;
 
@@ -18,6 +19,11 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddParser(this IServiceCollection services, IConfiguration configuration, IHostEnvironment environment)
     {
+        services.AddOptions<IngestionOptions>().Bind(configuration.GetSection(IngestionOptions.SectionName))
+            .ValidateDataAnnotations().ValidateOnStart();
+        services.AddSingleton<EventInputReader>();
+        services.AddSingleton<EventInputMapper>();
+        services.AddSingleton<EventIngestionService>();
         services.AddOptions<ParserOptions>().Bind(configuration.GetSection(ParserOptions.SectionName))
             .ValidateDataAnnotations()
             .Validate(options => environment.IsDevelopment() || !string.IsNullOrWhiteSpace(options.ApiKey), "Parser:ApiKey is required outside Development.")

@@ -98,7 +98,7 @@ public sealed class SourceCollector(
                 cancellationToken.ThrowIfCancellationRequested();
                 if (heartbeat is not null) await heartbeat(cancellationToken);
                 var normalized = normalizer.Normalize(sourceId, candidate with { RawDocumentId = document.Id });
-                var result = await events.SaveAsync(source, normalized.Candidate, document, cancellationToken);
+                var result = await events.SaveAsync(new(source.Id, source.Priority), normalized.Candidate, document, cancellationToken);
                 if (result.Outcome == "added") added++;
                 else if (result.Outcome == "updated") updated++;
                 else unchanged++;

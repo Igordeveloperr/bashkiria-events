@@ -77,6 +77,8 @@ public sealed class EventReviewService(IDbContextFactory<ParserDbContext> contex
         entity.IsFree = candidate.IsFree; entity.AgeLimit = candidate.AgeLimit; entity.SourceStatus = candidate.SourceStatus;
         entity.DedupKey = normalized.DedupKey; entity.Status = request.Status;
         entity.ReviewedAt = clock.GetUtcNow(); entity.ReviewNote = request.Note.Trim(); entity.UpdatedAt = clock.GetUtcNow();
+        if (entity.SourceType != EventSourceType.Page && request.Status == PublicationStatus.Published)
+            entity.VerifiedAt = entity.ReviewedAt.Value;
         entity.ManuallySuppressed = request.Status != PublicationStatus.Published;
         entity.Version++;
         await db.AuditEntries.AddAsync(new EventAuditEntry
